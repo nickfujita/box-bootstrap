@@ -1,0 +1,16 @@
+[Unit]
+Description=go-grip markdown preview server (nightshade theme)
+Documentation=https://github.com/nickfujita/go-grip
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Serves the working directory's markdown over the built-in nightshade theme.
+# -b=false keeps it headless (no browser launch) so it runs fine as a service.
+ExecStart=%h/.local/bin/go-grip -b=false --theme nightshade
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,29 @@
+# ~/.tmux.conf.local — personal tmux overrides
+#
+# WHY THIS FILE EXISTS: Spellguard overwrites ~/.tmux.conf on every bootstrap,
+# so any edit you make there is lost on the next run. The managed ~/.tmux.conf
+# sources ~/.tmux.conf.local at the end, and Spellguard does NOT touch that
+# file — so put your personal settings here and they survive re-bootstraps.
+#
+# install.sh copies this example to ~/.tmux.conf.local only if that file does
+# not already exist, so your customizations are never clobbered.
+
+# Larger scrollback buffer.
+set -g history-limit 50000
+
+# Start window/pane numbering at 1 and renumber on close.
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+
+# Mouse support (scroll, select, resize panes).
+set -g mouse on
+
+# Longer status-message display.
+set -g display-time 2000
+
+# Truecolor passthrough for modern terminals (adjust to your $TERM).
+set -ga terminal-overrides ",xterm-256color:Tc"
+
+# Quicker escape so vim/nvim feels snappy inside tmux.
+set -sg escape-time 10

@@ -1,0 +1,37 @@
+[Unit]
+Description=Tailscale node agent (personal tailnet, userspace networking)
+Documentation=https://tailscale.com/kb/1112/userspace-networking
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# A SECOND, independent tailscaled for a PERSONAL tailnet, running alongside the
+# org-managed kernel tailscaled that Spellguard bootstraps. The two must not
+# fight over the network stack, so this one runs in USERSPACE networking mode:
+#
+#   --tun=userspace-networking  -> creates NO TUN device and installs NO routes,
+#                                  so it cannot collide with the managed daemon's
+#                                  CGNAT (100.64.0.0/10) routes or its TUN device.
+#
+# Because there is no TUN, traffic INTO the personal tailnet goes through the
+# SOCKS5 / HTTP proxy this daemon exposes on localhost:1055 (see --socks5-server
+# and --outbound-http-proxy-listen below). A distinct --port (41642 vs the
+# managed daemon's default 41641) avoids a UDP port clash, and a private --socket
+# / --statedir keep the two daemons' control channels and state fully separate.
+#
+# RuntimeDirectory/StateDirectory make systemd create and own
+# /run/tailscale-personal and /var/lib/tailscale-personal.
+ExecStart=/usr/sbin/tailscaled \
+  --tun=userspace-networking \
+  --statedir=/var/lib/tailscale-personal \
+  --socket=/run/tailscale-personal/tailscaled.sock \
+  --port=41642 \
+  --socks5-server=localhost:1055 \
+  --outbound-http-proxy-listen=localhost:1055
+RuntimeDirectory=tailscale-personal
+StateDirectory=tailscale-personal
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
