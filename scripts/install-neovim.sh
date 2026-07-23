@@ -248,7 +248,7 @@ ensure_apt_packages() {
 }
 
 install_neovim_binary() {
-  local current="" arch asset extracted target tmp
+  local current="" arch asset checksum extracted target tmp
   if command -v nvim >/dev/null 2>&1; then
     current="$(nvim --version | sed -n '1s/^NVIM v//p')"
   fi
@@ -271,10 +271,20 @@ install_neovim_binary() {
   curl -fsSL \
     "https://github.com/neovim/neovim/releases/download/v${NEOVIM_VERSION}/${asset}" \
     -o "${tmp}/${asset}"
-  curl -fsSL \
-    "https://github.com/neovim/neovim/releases/download/v${NEOVIM_VERSION}/${asset}.sha256sum" \
-    -o "${tmp}/${asset}.sha256sum"
-  (cd "$tmp" && sha256sum -c "${asset}.sha256sum")
+  # Neovim release assets expose their SHA-256 digest through the GitHub API;
+  # there is no separate <asset>.sha256sum download.
+  checksum="$(
+    curl -fsSL \
+      -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/neovim/neovim/releases/tags/v${NEOVIM_VERSION}" \
+      | jq -r --arg asset "$asset" \
+        '.assets[] | select(.name == $asset) | .digest // empty' \
+      | sed 's/^sha256://' \
+      | head -n 1
+  )"
+  [ -n "$checksum" ] || die "could not find the official checksum for Neovim asset ${asset}"
+  printf '%s  %s\n' "$checksum" "$asset" > "${tmp}/SHA256SUM"
+  (cd "$tmp" && sha256sum -c SHA256SUM)
   tar -xzf "${tmp}/${asset}" -C "$tmp"
   "${SUDO[@]}" rm -rf "$target"
   "${SUDO[@]}" mv "${tmp}/${extracted}" "$target"
