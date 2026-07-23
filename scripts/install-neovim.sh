@@ -381,7 +381,7 @@ install_go_toolchain() {
 }
 
 install_lazygit() {
-  local current="" arch asset tmp
+  local current="" arch asset checksum tmp
   if command -v lazygit >/dev/null 2>&1; then current="$(command_version lazygit)"; fi
   if [ "$current" = "$LAZYGIT_VERSION" ]; then
     ok "lazygit ${LAZYGIT_VERSION} already installed"
@@ -392,17 +392,24 @@ install_lazygit() {
     aarch64) arch=arm64 ;;
     *) die "unsupported architecture $(uname -m) for lazygit" ;;
   esac
-  asset="lazygit_${LAZYGIT_VERSION}_Linux_${arch}.tar.gz"
+  asset="lazygit_${LAZYGIT_VERSION}_linux_${arch}.tar.gz"
   tmp="$(mktemp -d)"
   log "Installing lazygit ${LAZYGIT_VERSION}"
   curl -fsSL \
     "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/${asset}" \
     -o "${tmp}/${asset}"
-  curl -fsSL \
-    "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/checksums.txt" \
-    -o "${tmp}/checksums.txt"
-  grep " ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/checksums.selected"
-  (cd "$tmp" && sha256sum -c checksums.selected)
+  checksum="$(
+    curl -fsSL \
+      -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/jesseduffield/lazygit/releases/tags/v${LAZYGIT_VERSION}" \
+      | jq -r --arg asset "$asset" \
+        '.assets[] | select(.name == $asset) | .digest // empty' \
+      | sed 's/^sha256://' \
+      | head -n 1
+  )"
+  [ -n "$checksum" ] || die "could not find the official checksum for lazygit asset ${asset}"
+  printf '%s  %s\n' "$checksum" "$asset" > "${tmp}/SHA256SUM"
+  (cd "$tmp" && sha256sum -c SHA256SUM)
   tar -xzf "${tmp}/${asset}" -C "$tmp" lazygit
   "${SUDO[@]}" install -m 0755 "${tmp}/lazygit" /usr/local/bin/lazygit
   rm -rf "$tmp"
