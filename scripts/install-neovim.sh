@@ -88,6 +88,11 @@ append_once() {
   fi
 }
 
+nvim_alias_present() {
+  grep -qxF "alias n='nvim'" "${HOME}/.bash_aliases" 2>/dev/null \
+    || grep -qxF "alias n='nvim'" "${HOME}/.bashrc" 2>/dev/null
+}
+
 version_ge() {
   dpkg --compare-versions "$1" ge "$2"
 }
@@ -145,6 +150,12 @@ check_neovim_stack() {
       warn "${package} missing"; status=1
     fi
   done
+
+  if nvim_alias_present; then
+    ok "n=nvim Bash alias configured"
+  else
+    warn "n=nvim Bash alias missing"; status=1
+  fi
 
   if [ -d "$NVIM_CONFIG_DIR" ] \
     && diff -qr --exclude='.box-bootstrap-managed' "$NVIM_CONFIG_SOURCE" "$NVIM_CONFIG_DIR" >/dev/null 2>&1; then
@@ -458,7 +469,10 @@ install_shell_integration() {
   # Intentionally preserve the variables for expansion by future shells.
   # shellcheck disable=SC2016
   append_once "${HOME}/.profile" 'export PATH="$HOME/.local/bin:$PATH"'
-  append_once "${HOME}/.bashrc" 'alias n='\''nvim'\'''
+  if ! nvim_alias_present; then
+    # Ubuntu's stock ~/.bashrc already sources this file when it exists.
+    append_once "${HOME}/.bash_aliases" 'alias n='\''nvim'\'''
+  fi
   ok "shell integration present (~/.local/bin PATH and n=nvim alias)"
 }
 
@@ -517,13 +531,13 @@ case "${1:-}" in
     check_disk_space
     ensure_apt_packages
     install_neovim_binary
+    install_shell_integration
+    install_fd_alias
     install_node
     install_go_toolchain
     install_lazygit
     install_tree_sitter_cli
     install_swift_toolchain
-    install_fd_alias
-    install_shell_integration
     sync_neovim_config
     install_lazyvim_stack
     log "Neovim bootstrap complete. Open a new shell, then run: n"
