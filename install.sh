@@ -9,11 +9,12 @@
 # is already in place, so re-running this script is safe.
 #
 # Usage:
-#   ./install.sh                      # install the core three (tailscale, gogrip, matrix)
-#   ./install.sh --check              # probe the core three, change nothing
+#   ./install.sh                      # install all four core components
+#   ./install.sh --check              # probe all four core components
 #   ./install.sh --gogrip             # only the selected core component(s)
-#   ./install.sh --all                # core three + every --with-* extra
-#   ./install.sh --with-go --with-uv  # core three PLUS optional extras
+#   ./install.sh --neovim             # only the complete editor stack
+#   ./install.sh --all                # core four + every --with-* extra
+#   ./install.sh --with-go --with-uv   # core four PLUS optional extras
 #   ./install.sh --matrix --check     # probe just one component
 #
 # Secrets are read from the environment (see examples/ccmatrix-config.env.example);
@@ -320,6 +321,7 @@ install_matrix() {
 check_go()     { if command -v go >/dev/null 2>&1;     then ok "go present";     return 0; else warn "go missing";     return 1; fi; }
 check_docker() { if command -v docker >/dev/null 2>&1; then ok "docker present"; return 0; else warn "docker missing"; return 1; fi; }
 check_uv()     { if command -v uv >/dev/null 2>&1 || [ -x "${HOME}/.local/bin/uv" ]; then ok "uv present"; return 0; else warn "uv missing"; return 1; fi; }
+check_neovim() { "${SCRIPT_DIR}/scripts/install-neovim.sh" --check; }
 
 install_go() {
   log "Component: Go toolchain"
@@ -360,6 +362,11 @@ install_uv() {
   ok "uv installed to ~/.local/bin"
 }
 
+install_neovim() {
+  log "Component: complete Neovim/LazyVim environment"
+  "${SCRIPT_DIR}/scripts/install-neovim.sh"
+}
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═════════════════════════════════════════════════════════════════════════════
@@ -369,10 +376,11 @@ box-bootstrap — personalize a Spellguard-managed cloud dev box (idempotent).
 
 Usage: ./install.sh [--check] [components] [extras]
 
-Core components (default: all three run when none are named):
+Core components (default: all four run when none are named):
   --tailscale     Second, personal tailscaled (userspace networking)
   --gogrip        go-grip markdown preview user service
   --matrix        Matrix bridge plugin + ccmatrix config
+  --neovim        Complete captured Neovim/LazyVim stack
 
 Optional extras (off unless requested):
   --with-go       Install the Go toolchain (official tarball)
@@ -380,7 +388,7 @@ Optional extras (off unless requested):
   --with-uv       Install uv (astral.sh installer)
 
 Modifiers:
-  --all           Core three + every extra
+  --all           Core four + every extra
   --check         Probe selected components and report; change nothing
   -h, --help      Show this help
 
@@ -389,7 +397,7 @@ EOF
 }
 
 DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
-DO_GO=0; DO_DOCKER=0; DO_UV=0
+DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0
 CHECK_ONLY=0; CORE_SELECTED=0
 
 while [ $# -gt 0 ]; do
@@ -397,10 +405,13 @@ while [ $# -gt 0 ]; do
     --tailscale)   DO_TAILSCALE=1; CORE_SELECTED=1 ;;
     --gogrip)      DO_GOGRIP=1; CORE_SELECTED=1 ;;
     --matrix)      DO_MATRIX=1; CORE_SELECTED=1 ;;
+    --neovim)      DO_NEOVIM=1; CORE_SELECTED=1 ;;
     --with-go)     DO_GO=1 ;;
     --with-docker) DO_DOCKER=1 ;;
     --with-uv)     DO_UV=1 ;;
-    --all)         DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_GO=1; DO_DOCKER=1; DO_UV=1; CORE_SELECTED=1 ;;
+    # Backward-compatible alias from when Neovim was an optional extra.
+    --with-neovim) DO_NEOVIM=1 ;;
+    --all)         DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_GO=1; DO_DOCKER=1; DO_UV=1; DO_NEOVIM=1; CORE_SELECTED=1 ;;
     --check)       CHECK_ONLY=1 ;;
     -h|--help)     usage; exit 0 ;;
     *)             die "unknown option: $1 (see --help)" ;;
@@ -408,9 +419,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Default to the core three when no specific core component was named.
+# Default to all four core components when none was specifically selected.
 if [ "$CORE_SELECTED" -eq 0 ]; then
-  DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1
+  DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
 fi
 
 main() {
@@ -423,6 +434,7 @@ main() {
     [ "$DO_GO"        -eq 1 ] && { printf -- '── go ──\n';         check_go        || rc=1; }
     [ "$DO_DOCKER"    -eq 1 ] && { printf -- '── docker ──\n';     check_docker    || rc=1; }
     [ "$DO_UV"        -eq 1 ] && { printf -- '── uv ──\n';         check_uv        || rc=1; }
+    [ "$DO_NEOVIM"    -eq 1 ] && { printf -- '── neovim ──\n';     check_neovim    || rc=1; }
     if [ "$rc" -eq 0 ]; then ok "all selected components satisfied"; else warn "some components need install (re-run without --check)"; fi
     return $rc
   fi
@@ -433,6 +445,7 @@ main() {
   [ "$DO_GO"        -eq 1 ] && install_go
   [ "$DO_DOCKER"    -eq 1 ] && install_docker
   [ "$DO_UV"        -eq 1 ] && install_uv
+  [ "$DO_NEOVIM"    -eq 1 ] && install_neovim
   log "Bootstrap complete."
   return 0
 }

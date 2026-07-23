@@ -6,14 +6,15 @@ tailnet, `~/.tmux.conf`, and the kernel `tailscaled` it bootstraps. This repo
 layers *your* personal tooling on top **without touching anything Spellguard
 manages**, and it is safe to re-run — every step is a no-op once it is in place.
 
-It installs three core components (all on by default) plus optional extras:
+It installs four core components (all on by default) plus optional extras:
 
 | Component | What it does |
 |-----------|--------------|
 | **tailscale** | A *second*, personal `tailscaled` on a **personal tailnet**, in userspace-networking mode, alongside the org-managed daemon. |
 | **gogrip** | Installs the [go-grip](https://github.com/nickfujita/go-grip) release binary and runs it as a systemd **user** service (markdown preview on port 6419, nightshade theme). |
 | **matrix** | Adds the Claude Code Matrix-bridge plugin, enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
-| *extras* | `--with-go`, `--with-docker`, `--with-uv` — standard toolchain installs. |
+| **neovim** | Installs the complete captured Neovim/LazyVim editor, language toolchains, LSPs, and supporting CLI tools. |
+| *extras* | `--with-go`, `--with-docker`, `--with-uv` — standalone toolchain installs. |
 
 ## The two-daemon model
 
@@ -44,15 +45,20 @@ $EDITOR ~/bootstrap.env
 
 # 2. Load it and run the installer.
 set -a; . ~/bootstrap.env; set +a
-./install.sh                 # core three: tailscale + gogrip + matrix
+./install.sh                 # core four, including the complete Neovim setup
 
 # Or select components / add extras:
 ./install.sh --gogrip                    # just one core component
-./install.sh --with-go --with-uv         # core three + extras
-./install.sh --all                       # core three + every extra
+./install.sh --neovim                    # just the complete editor setup
+./install.sh --with-go --with-uv         # core four + extras
+./install.sh --all                       # core four + every extra
+
+# Install only the editor, without any core box components:
+./scripts/install-neovim.sh
 
 # 3. Verify without changing anything:
 ./install.sh --check
+./scripts/install-neovim.sh --check
 ```
 
 Run `./install.sh --help` for the full flag list.
@@ -119,6 +125,84 @@ port 6419 with the built-in `nightshade` theme).
 > `~/.tmux.conf.local`, which Spellguard never touches — so personal tmux
 > settings must live there.
 
+### Neovim / LazyVim
+
+The complete editor setup from the reference VM is captured in
+[`dotfiles/nvim`](dotfiles/nvim). Run either:
+
+```bash
+# Editor only:
+./scripts/install-neovim.sh
+
+# The editor is a default core component:
+./install.sh
+
+# Everything box-bootstrap offers:
+./install.sh --all
+```
+
+The standalone installer starts from a plain Ubuntu 24.04 VM and installs or
+converges all of the following:
+
+- Neovim 0.12.4 from the official prebuilt release (with LuaJIT)
+- Git, curl, a C compiler, ripgrep, fd, fzf, and lazygit
+- Node/npm and `tree-sitter-cli`
+- Python 3, Go, Java 21, Swift, and `sourcekit-lsp`
+- the captured LazyVim plugin lockfile
+- Blink completion plus LSPs, formatters, and linters for JavaScript,
+  TypeScript, Python, Go, Swift, Kotlin, Markdown, TOML, JSON, YAML, Docker,
+  HTML, CSS, shell, and SQL
+- the captured Tree-sitter parsers
+- the `n=nvim` Bash alias
+
+The setup uses the **VS Code dark theme only**. AI completion is installed but
+starts disabled; `<leader>uA` toggles Copilot/Sidekick suggestions for the
+current Neovim session. Ordinary LSP/Blink completion remains enabled.
+
+Toolchain and plugin versions are deliberately pinned to the versions tested
+together on the reference VM. The version constants at the top of
+[`scripts/install-neovim.sh`](scripts/install-neovim.sh) and
+[`dotfiles/nvim/lazy-lock.json`](dotfiles/nvim/lazy-lock.json) are the upgrade
+points.
+
+A first install with every language toolchain needs roughly 7 GB of persistent
+space and can temporarily use more while Swift and Go tools are unpacked or
+built. Start with **at least 10 GB free**; the installer performs a disk-space
+preflight and installs Mason packages sequentially to limit peak usage.
+
+#### Existing config and ongoing changes
+
+`dotfiles/nvim` is the source of truth. On the first run:
+
+- if `~/.config/nvim` is absent, it is created;
+- if it already matches, it is adopted without a backup;
+- if it is an unmanaged, different config, it is preserved as
+  `~/.config/nvim.pre-box-bootstrap-<timestamp>`.
+
+Once managed, rerunning the installer intentionally converges
+`~/.config/nvim` back to the repository copy, removing local config drift. Make
+lasting changes in `dotfiles/nvim`, or make them on the reference VM and
+recapture them:
+
+```bash
+./scripts/capture-neovim.sh
+git diff -- dotfiles/nvim
+```
+
+Only configuration is captured. Neovim data, caches, session state, and
+credentials are not copied.
+
+#### Per-machine steps
+
+Two things are intentionally not portable:
+
+1. **Copilot authentication.** Tokens are never stored in this repository. On a
+   new VM, open Neovim and run `:LspCopilotSignIn` once. Suggestions still
+   remain off until `<leader>uA`.
+2. **The Nerd Font.** Terminal glyphs are rendered by the SSH client, so keep
+   the Nerd Font selected in the iTerm2 profile on the Mac. Installing a font
+   on the remote VM does not change iTerm2's rendering.
+
 ## Nick-side prerequisites (personal tailnet admin console)
 
 These are one-time setup steps in the **personal** tailnet before a box can join.
@@ -175,13 +259,19 @@ Every component ships a `--check` probe. `./install.sh --check` reports each
 selected component as satisfied or not and changes nothing (exit non-zero if any
 selected component is incomplete). Re-running `./install.sh` is a no-op when
 everything is already in place: binaries/units are only (re)written when missing
-or changed, config files are never clobbered, and `tailscale up` / service
-enables are skipped when already active.
+or changed, core service config files are never clobbered, and `tailscale up` /
+service enables are skipped when already active. The Neovim config is the one
+exception: once marked as managed, it deliberately converges to the checked-in
+copy so all VMs stay consistent.
 
 ## Repo layout
 
 ```
 install.sh                              # the idempotent installer
+dotfiles/nvim/                          # captured LazyVim configuration + lock
+scripts/install-neovim.sh               # standalone full editor installer
+scripts/bootstrap-nvim.lua              # headless Mason/Tree-sitter installer
+scripts/capture-neovim.sh               # refresh the captured config
 units/tailscaled-personal.service       # personal tailscaled (system unit)
 units/gogrip.service                    # go-grip preview (user unit)
 examples/ccmatrix-config.env.example    # runtime env template (no real secrets)
