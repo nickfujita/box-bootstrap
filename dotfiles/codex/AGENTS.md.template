@@ -55,41 +55,6 @@ use `uv pip install`, `uv sync`, or `uv run`.
 - Do not report a test as failing because a required service is not running.
   That is operator error, not a test failure.
 
-<!-- pending: remove once matrix-bridge-plugin ships the session-sentinel hook -->
-## Live Agent CLI Tests and Phone Bridge
-
-- Do not launch a nested `claude`, `claude -p`, `codex`, or similar live agent
-  session in the same tmux pane as the active bridged session. This machine runs
-  the claude-code-matrix bridge, which keys sessions by tmux pane. A nested
-  session in the same pane can deactivate the live session and silently break
-  inbound phone-to-terminal routing while outbound messages still appear to work.
-- Prefer running live-CLI and end-to-end tests that spawn real agent sessions
-  inside a Docker instance, or at minimum in a separate unbridged tmux pane, so
-  they cannot disturb the active bridge session.
-- If a nested session on this machine is unavoidable and the bridge is disturbed,
-  reactivate the real session in `~/.ccmatrix/sessions.json` by setting
-  `active: true` and `ended_at: null`, then restart the daemon.
-
-<!-- pending: remove once matrix-bridge-plugin ships the session-sentinel hook -->
-## Mobile and TTS Final Messages
-
-When the operator is mobile, only the final on-complete message reaches them,
-and it is read aloud by TTS. Mid-turn messages are not seen and Markdown does
-not survive the audio channel. Apply this whenever mobile mode is active or
-likely.
-
-- Go TTS-safe on any hint the operator is mobile or away, including "going
-  mobile", "on my phone", "heading out", messages arriving via the phone bridge,
-  or voice-dictated typos. Invoke the `go-mobile` skill immediately when
-  available.
-- Keep the final message conversational plain prose. Avoid markdown links,
-  commit hashes, file paths, tables, and code blocks when TTS mode is active.
-- If the operator must act on a URL, paste the raw URL on its own line at the
-  very end of the message. Do not wrap it in a markdown link.
-- Put multiple-choice options at the end in natural spoken language.
-- If the operator says TTS failed and asks for a repeat, resend the previous
-  final message verbatim as one message.
-
 ## Safety
 
 - Never run destructive commands such as `rm -rf`, `DROP TABLE`, or
