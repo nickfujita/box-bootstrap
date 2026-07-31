@@ -544,11 +544,6 @@ check_codex_config() {
       --target "$CODEX_CONFIG" 2>/dev/null | tr '\n' ' ' || true)"
     warn "portable config keys missing from ~/.codex/config.toml: ${missing}"; status=1
   fi
-  if [ -f "${CODEX_SKILLS_DIR}/codex-config-reconcile/SKILL.md" ]; then
-    ok "codex-config-reconcile skill installed"
-  else
-    warn "codex-config-reconcile skill not installed"; status=1
-  fi
   if grep -q "^\[marketplaces\.${SUPERPOWERS_MARKETPLACE_NAME}\]" "$CODEX_CONFIG" 2>/dev/null; then
     ok "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} configured"
   else
@@ -581,15 +576,7 @@ install_codex_config() {
     install_managed_file "${DOTFILES_DIR}/codex/agents/${f}" "${CODEX_AGENTS_DIR}/${f}" 0644
   done
 
-  # 2. The reconciliation skill.
-  install_managed_file \
-    "${DOTFILES_DIR}/codex/skills/codex-config-reconcile/SKILL.md" \
-    "${CODEX_SKILLS_DIR}/codex-config-reconcile/SKILL.md" 0644
-  install_managed_file \
-    "${DOTFILES_DIR}/codex/skills/codex-config-reconcile/agents/openai.yaml" \
-    "${CODEX_SKILLS_DIR}/codex-config-reconcile/agents/openai.yaml" 0644
-
-  # 3. Portable config keys — ADDITIVE ONLY. An existing key keeps its value,
+  # 2. Portable config keys — ADDITIVE ONLY. An existing key keeps its value,
   #    and the tables the provider writes (shell_environment_policy,
   #    hooks.state, projects, marketplaces) are never named, so never touched.
   if codex_config_satisfied; then

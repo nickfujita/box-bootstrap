@@ -1,4 +1,0 @@
-interface:
-  display_name: "Reconcile Codex Configuration"
-  short_description: "Review and reconcile portable Codex settings"
-  default_prompt: "Use $codex-config-reconcile to compare this VM with the home-server Codex baseline and interactively reconcile approved differences."

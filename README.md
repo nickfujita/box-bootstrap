@@ -259,11 +259,10 @@ Two things are intentionally not portable:
 
 1. Installs the four custom agents (`luna-worker`, `sol-low`, `sol-medium`,
    `sol-high`) into `~/.codex/agents/`.
-2. Installs the `codex-config-reconcile` skill into `~/.codex/skills/`.
-3. Merges [`dotfiles/codex/config.portable.toml`](dotfiles/codex/config.portable.toml)
+2. Merges [`dotfiles/codex/config.portable.toml`](dotfiles/codex/config.portable.toml)
    into `~/.codex/config.toml` **additively** via
    [`scripts/merge-codex-config.sh`](scripts/merge-codex-config.sh).
-4. Adds the superpowers marketplace and installs `superpowers@superpowers-dev`
+3. Adds the superpowers marketplace and installs `superpowers@superpowers-dev`
    and `github@openai-curated` with `codex plugin marketplace add` /
    `codex plugin add`.
 
@@ -451,7 +450,6 @@ dotfiles/codex/AGENTS.md.template       # ~/.codex/AGENTS.md template (portable 
 dotfiles/codex/config.portable.toml     # additively merged into ~/.codex/config.toml
 dotfiles/codex/agents/*.toml            # custom Codex agents
 dotfiles/codex/instructions/shared.md   # multi-agent workflow block (sync markers)
-dotfiles/codex/skills/                  # codex-config-reconcile skill
 dotfiles/shell/bashrc-block.sh          # the marker-guarded ~/.bashrc block
 scripts/install-neovim.sh               # standalone full editor installer
 scripts/bootstrap-nvim.lua              # headless Mason/Tree-sitter installer
