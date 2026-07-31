@@ -366,7 +366,7 @@ Renders two vendored templates:
 > it in a file under `~/.codex/references/` instead. Neither file is ever
 > overwritten without a timestamped `.pre-box-bootstrap-<ts>` backup.
 
-## Nick-side prerequisites (personal tailnet admin console)
+## Operator-side prerequisites (personal tailnet admin console)
 
 These are one-time setup steps in the **personal** tailnet before a box can join.
 
