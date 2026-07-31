@@ -1,0 +1,106 @@
+# Shared Global Agent Instructions
+
+These are the operator's global, agent-neutral operating rules for this machine
+and related development machines. Claude Code imports this file from
+`~/.claude/CLAUDE.md`; Codex reads it directly from `~/.codex/AGENTS.md`.
+
+Machine-specific context (home infrastructure, per-project dogfooding runbooks,
+credential locations) does not belong here. Keep it in a separate file under
+`~/.codex/references/` and point at it from a project's own instructions.
+
+## Git Workflow
+
+- Never push directly to `main`; create a feature branch.
+- Never merge pull requests. Create the PR and stop; a human will review and
+  merge.
+- Never force-push.
+- Never delete remote branches unless explicitly asked.
+- Use branch names like `<type>/<short-description>`, for example
+  `feat/add-login`, `fix/null-pointer`, or `refactor/cleanup-api`.
+- Write descriptive PR titles and include a summary of changes in the body.
+- Do not prefix PR titles with agent labels such as `[codex]`, `[claude]`, or
+  similar. Prefer the repo's conventional style, for example
+  `feat(cli): add login`.
+- Never commit files containing secrets, tokens, or credentials such as `.env`
+  files or `*.pem` files.
+- Never modify CI/CD pipeline configuration without explicit approval.
+
+## File Links
+
+When sharing links to files in a repo, prefix them with the go-grip browsable
+URL so they are clickable from the operator's machine:
+
+```text
+{{GOGRIP_BASE_URL}}/<repo-name>/<path-within-repo>
+```
+
+For example:
+
+```text
+{{GOGRIP_BASE_URL}}/my-repo/docs/reviews/code-review/report.md
+```
+
+## Python
+
+Use `uv` for Python dependency management, virtual environments, and script
+execution across the operator's projects. Do not use `pip install` directly;
+use `uv pip install`, `uv sync`, or `uv run`.
+
+## Testing
+
+- Do not run tests blindly. First check what services they require by reading
+  prerequisites, comments, docs, or test setup.
+- Verify required services are running before executing tests; start them when
+  they are missing.
+- Do not report a test as failing because a required service is not running.
+  That is operator error, not a test failure.
+
+<!-- pending: remove once matrix-bridge-plugin ships the session-sentinel hook -->
+## Live Agent CLI Tests and Phone Bridge
+
+- Do not launch a nested `claude`, `claude -p`, `codex`, or similar live agent
+  session in the same tmux pane as the active bridged session. This machine runs
+  the claude-code-matrix bridge, which keys sessions by tmux pane. A nested
+  session in the same pane can deactivate the live session and silently break
+  inbound phone-to-terminal routing while outbound messages still appear to work.
+- Prefer running live-CLI and end-to-end tests that spawn real agent sessions
+  inside a Docker instance, or at minimum in a separate unbridged tmux pane, so
+  they cannot disturb the active bridge session.
+- If a nested session on this machine is unavoidable and the bridge is disturbed,
+  reactivate the real session in `~/.ccmatrix/sessions.json` by setting
+  `active: true` and `ended_at: null`, then restart the daemon.
+
+<!-- pending: remove once matrix-bridge-plugin ships the session-sentinel hook -->
+## Mobile and TTS Final Messages
+
+When the operator is mobile, only the final on-complete message reaches them,
+and it is read aloud by TTS. Mid-turn messages are not seen and Markdown does
+not survive the audio channel. Apply this whenever mobile mode is active or
+likely.
+
+- Go TTS-safe on any hint the operator is mobile or away, including "going
+  mobile", "on my phone", "heading out", messages arriving via the phone bridge,
+  or voice-dictated typos. Invoke the `go-mobile` skill immediately when
+  available.
+- Keep the final message conversational plain prose. Avoid markdown links,
+  commit hashes, file paths, tables, and code blocks when TTS mode is active.
+- If the operator must act on a URL, paste the raw URL on its own line at the
+  very end of the message. Do not wrap it in a markdown link.
+- Put multiple-choice options at the end in natural spoken language.
+- If the operator says TTS failed and asks for a repeat, resend the previous
+  final message verbatim as one message.
+
+## Safety
+
+- Never run destructive commands such as `rm -rf`, `DROP TABLE`, or
+  `git reset --hard` without explicit approval.
+- Never run a destructive virtualization command such as `qm destroy` or
+  `pct destroy` without explicit approval.
+
+> The multi-agent section below is synced from the versioned baseline. Its named
+> agents (`luna_worker`, `sol_low`, `sol_medium`, `sol_high`, the Sol xhigh
+> orchestrator) are **Codex-only** definitions, in `~/.codex/agents/*.toml`.
+> Claude Code sessions have no such agents — apply the same orchestration
+> discipline using whichever agent types that harness offers.
+
+{{CODEX_SHARED_INSTRUCTIONS}}
