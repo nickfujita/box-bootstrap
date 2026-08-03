@@ -64,6 +64,40 @@ CLAUDE_PROVIDER_PLUGIN="spellguard@spellguard"
 # ── Codex (component: codex-config, global-instructions) ─────────────────────
 CODEX_DIR="${HOME}/.codex"
 CODEX_CONFIG="${CODEX_DIR}/config.toml"
+
+# The `[agents]` SETTINGS keys (enabled / max_concurrent_threads_per_session /
+# max_depth / default_subagent_*) only exist from codex 0.145.0, where
+# multi_agent_v2 stabilised. On an older CLI `[agents]` is a map of agent ROLES,
+# so those scalars make config.toml fail to parse and EVERY codex command dies
+# with "invalid type: boolean `true`, expected struct AgentRoleToml". A managed
+# box can ship an older pinned codex than a dev VM, so gate the baseline on the
+# installed version rather than assuming. (Hit live on a managed box running
+# codex 0.140.0, 2026-08-03.)
+CODEX_AGENTS_SETTINGS_MIN="0.145.0"
+codex_supports_agents_settings() {
+  have_cmd codex || return 1
+  local v
+  v="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  [ -n "$v" ] || return 1
+  [ "$(printf '%s\n%s\n' "$CODEX_AGENTS_SETTINGS_MIN" "$v" | sort -V | head -1)" = "$CODEX_AGENTS_SETTINGS_MIN" ]
+}
+
+# Emit the baseline to use for the merge: the vendored file, minus the [agents]
+# table when the installed codex is too old to understand it.
+codex_baseline_file() {
+  local src="${DOTFILES_DIR}/codex/config.portable.toml"
+  if codex_supports_agents_settings; then
+    printf '%s' "$src"
+    return
+  fi
+  local trimmed="${TMPDIR:-/tmp}/box-bootstrap-codex-baseline.$$.toml"
+  awk '
+    /^\[agents\]$/ { skip = 1; next }
+    /^\[/          { skip = 0 }
+    !skip          { print }
+  ' "$src" > "$trimmed"
+  printf '%s' "$trimmed"
+}
 CODEX_AGENTS_DIR="${CODEX_DIR}/agents"
 CODEX_SKILLS_DIR="${CODEX_DIR}/skills"
 CODEX_AGENTS_MD="${CODEX_DIR}/AGENTS.md"
@@ -523,7 +557,7 @@ install_agent_config() {
 # ═════════════════════════════════════════════════════════════════════════════
 codex_config_satisfied() {
   "${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
-    --baseline "${DOTFILES_DIR}/codex/config.portable.toml" \
+    --baseline "$(codex_baseline_file)" \
     --target "$CODEX_CONFIG" >/dev/null 2>&1
 }
 
@@ -540,7 +574,7 @@ check_codex_config() {
     ok "portable config keys present in ~/.codex/config.toml"
   else
     missing="$("${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
-      --baseline "${DOTFILES_DIR}/codex/config.portable.toml" \
+      --baseline "$(codex_baseline_file)" \
       --target "$CODEX_CONFIG" 2>/dev/null | tr '\n' ' ' || true)"
     warn "portable config keys missing from ~/.codex/config.toml: ${missing}"; status=1
   fi
@@ -584,7 +618,7 @@ install_codex_config() {
   else
     tmp="$(mktemp)"
     "${SCRIPT_DIR}/scripts/merge-codex-config.sh" \
-      --baseline "${DOTFILES_DIR}/codex/config.portable.toml" \
+      --baseline "$(codex_baseline_file)" \
       --target "$CODEX_CONFIG" > "$tmp"
     if [ -f "$CODEX_CONFIG" ]; then
       warn "backed up existing config.toml to $(backup_file "$CODEX_CONFIG")"
@@ -764,7 +798,16 @@ install_dark_factory() {
     if have_cmd agent-browser; then
       ok "agent-browser already installed; skipping"
     else
-      npm install -g agent-browser || warn "could not npm-install agent-browser"
+      # A NodeSource/apt Node puts the global prefix under /usr, which the box
+      # user cannot write (managed boxes hit this); fall back to sudo.
+      if ! npm install -g agent-browser 2>/dev/null; then
+        if [ -n "$SUDO" ] || [ "$(id -u)" -eq 0 ]; then
+          warn "npm global prefix is not user-writable; installing agent-browser with sudo"
+          $SUDO npm install -g agent-browser || warn "could not npm-install agent-browser"
+        else
+          warn "could not npm-install agent-browser (npm global prefix not writable and no sudo)"
+        fi
+      fi
     fi
     if have_cmd agent-browser; then
       if [ -f "$DARK_FACTORY_STAMP" ]; then
