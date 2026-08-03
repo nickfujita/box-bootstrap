@@ -80,7 +80,7 @@ SHELL_MARKER_END='# <<< box-bootstrap shell block <<<'
 BOX_CONF_DIR="${HOME}/.config/box-bootstrap"
 BOX_SHELL_ENV="${BOX_CONF_DIR}/shell.env"
 # 12 GB fits a 16 GB dev box; the 4 GB Node default aborts long agent runs.
-NODE_MAX_OLD_SPACE_MB="${NODE_MAX_OLD_SPACE_MB:-12288}"
+NODE_MAX_OLD_SPACE_MB="${NODE_MAX_OLD_SPACE_MB:-8192}"
 
 # ── Notifications (component: notifications) ─────────────────────────────────
 LOCAL_BIN="${HOME}/.local/bin"
