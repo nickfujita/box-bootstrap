@@ -843,7 +843,18 @@ install_notifications() {
 
   # The webhook endpoint and its token live here, NOT in the scripts, so
   # rotating the credential is an edit of this file rather than a reinstall.
-  mkdir -p "$MOSHI_CONF_DIR"
+  # On a Spellguard-managed box ~/.config is created by the provisioner as ROOT,
+  # so a plain mkdir under it fails for the box user. Take ownership of the
+  # parent (not its existing children) with sudo when that happens, then retry.
+  if ! mkdir -p "$MOSHI_CONF_DIR" 2>/dev/null; then
+    if have_cmd sudo && sudo -n true 2>/dev/null; then
+      warn "$(dirname "$MOSHI_CONF_DIR") is not writable; taking ownership with sudo"
+      sudo mkdir -p "$MOSHI_CONF_DIR"
+      sudo chown "$(id -u):$(id -g)" "$(dirname "$MOSHI_CONF_DIR")" "$MOSHI_CONF_DIR"
+    else
+      die "cannot create ${MOSHI_CONF_DIR} and passwordless sudo is unavailable. Fix with: sudo chown $(id -un) $(dirname "$MOSHI_CONF_DIR")"
+    fi
+  fi
   chmod 700 "$MOSHI_CONF_DIR"
   if [ -f "$MOSHI_CONF" ]; then
     chmod 600 "$MOSHI_CONF"
