@@ -668,6 +668,12 @@ check_shell() {
   else
     warn "box-bootstrap shell block missing from ~/.bashrc"; status=1
   fi
+  # The block ships pnpm ALIASES; without pnpm itself they are dead commands.
+  if have_cmd pnpm; then
+    ok "pnpm available ($(pnpm --version 2>/dev/null || echo 'version unknown'))"
+  else
+    warn "pnpm missing — the shell block's pnpm aliases will not work"; status=1
+  fi
   # An unmanaged tmux auto-attach is fine; a SECOND one double-attaches, which
   # is exactly why the vendored block leaves tmux alone.
   attaches="$(grep -c 'tmux attach-session' "$BASHRC" 2>/dev/null || true)"
@@ -725,6 +731,26 @@ install_shell() {
     ok "appended the box-bootstrap block to ~/.bashrc"
   fi
   rm -f "$rendered"
+
+  # pnpm. The block above ships the pnpm aliases and PNPM_HOME, but a managed
+  # box has no pnpm at all: its Node comes from NodeSource apt, so the npm
+  # global prefix is /usr (root-owned) and `npm i -g` fails for the box user.
+  # (A dev VM gets pnpm free via nvm + corepack, which is why this gap only
+  # shows up on a managed box — found 2026-08-03 when `pnpm install` failed.)
+  # corepack ships with Node >= 16.9, so enabling its pnpm shim is the smallest
+  # correct step: the shim resolves whatever version a repo pins in its
+  # packageManager field, into the user-owned corepack cache.
+  if have_cmd pnpm; then
+    ok "pnpm already available ($(pnpm --version 2>/dev/null || echo 'version unknown'))"
+  elif have_cmd corepack; then
+    if $SUDO corepack enable pnpm >/dev/null 2>&1 && have_cmd pnpm; then
+      ok "enabled the corepack pnpm shim"
+    else
+      warn "could not enable the corepack pnpm shim; install pnpm manually"
+    fi
+  else
+    warn "neither pnpm nor corepack found; install Node >= 16.9 (or pnpm) and re-run --shell"
+  fi
 
   # Optional shell secrets, kept out of the world-readable ~/.bashrc. The block
   # above sources this file when it exists; rotating a value is an edit here.

@@ -39,6 +39,9 @@ ppex () { pnpm exec "$@"; }
 ppx () { pnpm dlx "$@"; }
 npk () { ppx npkill -D -y; }
 export COREPACK_ENABLE_AUTO_PIN=false
+# Corepack downloads the packageManager-pinned pnpm/yarn on first use; without
+# this it stops to ask, which hangs any non-interactive/agent-driven shell.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 # ── npm ──────────────────────────────────────────────────────────────────────
 ni () { npm i; }
