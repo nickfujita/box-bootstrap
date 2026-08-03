@@ -9,5 +9,5 @@ max_concurrent_threads_per_session = 6
 max_depth = 1
 # Fail-safe defaults if a spawn omits routing (per-spawn fields can be
 # hidden from a Sol parent): bounded-work tier, not another Sol.
-default_subagent_model = "gpt-5.6-luna"
+default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "xhigh"

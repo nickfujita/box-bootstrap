@@ -1,13 +1,15 @@
-name = "luna_worker"
+name = "luna_max"
 description = """
 Default implementation worker for bounded tasks where the brief is complete
-and the target files are named. Runs Luna at xhigh: matches Sol-low quality
-on bounded work at a fraction of the cost. Not for tasks that must discover
-their own context repo-wide — route those to sol_low.
+and the target files are named. Runs Luna at max effort — near-Sol quality on
+bounded work at a fraction of the credit cost. Known Codex bug (#36294):
+spawn_agent currently rejects Luna under a Sol parent — if the spawn errors,
+route the task to terra_xhigh or run Luna as a standalone thread. Not for
+tasks that must discover their own context repo-wide.
 """
 
 model = "gpt-5.6-luna"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """

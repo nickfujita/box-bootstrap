@@ -67,7 +67,7 @@ CODEX_CONFIG="${CODEX_DIR}/config.toml"
 CODEX_AGENTS_DIR="${CODEX_DIR}/agents"
 CODEX_SKILLS_DIR="${CODEX_DIR}/skills"
 CODEX_AGENTS_MD="${CODEX_DIR}/AGENTS.md"
-CODEX_AGENT_FILES="luna-worker.toml sol-low.toml sol-medium.toml sol-high.toml"
+CODEX_AGENT_FILES="luna-max.toml terra-xhigh.toml sol-high.toml"
 SUPERPOWERS_MARKETPLACE_URL="${SUPERPOWERS_MARKETPLACE_URL:-https://github.com/obra/superpowers.git}"
 # The name comes from the marketplace's own manifest, not from the URL.
 SUPERPOWERS_MARKETPLACE_NAME="superpowers-dev"

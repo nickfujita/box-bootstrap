@@ -257,7 +257,7 @@ Two things are intentionally not portable:
 
 ### codex-config
 
-1. Installs the four custom agents (`luna-worker`, `sol-low`, `sol-medium`,
+1. Installs the three custom agents (`luna-max`, `terra-xhigh`,
    `sol-high`) into `~/.codex/agents/`.
 2. Merges [`dotfiles/codex/config.portable.toml`](dotfiles/codex/config.portable.toml)
    into `~/.codex/config.toml` **additively** via

@@ -31,22 +31,23 @@ Delegate to the named agents in `~/.codex/agents/`. The static agent files
 are the source of truth for model and reasoning effort, because per-spawn
 routing fields are hidden from the model by default when the parent is Sol.
 
-- Use `luna_worker` (Luna, xhigh) as the default for bounded implementation
-  where the brief is complete and the target files are named. It matches
-  Sol-low quality on such work at roughly a quarter of the cost.
-- Use `sol_low` (Sol, low) for implementation that must discover its own
-  context: repo-wide refactors, large diffs, or work spanning many files.
-  Luna's long-context recall drops sharply, so route these to Sol regardless
-  of task size.
-- Use `sol_medium` (Sol medium) for debugging, architectural judgment, or
-  changes spanning several interacting code paths.
+- Use `luna_max` (Luna, max) as the default for bounded implementation where
+  the brief is complete and the target files are named — near-Sol quality on
+  such work at a fraction of the credit cost. Known Codex bug (#36294):
+  spawn_agent currently rejects Luna under a Sol parent; if the spawn errors,
+  route the task to `terra_xhigh` or run Luna as a standalone thread.
+- Use `terra_xhigh` (Terra, xhigh) for implementation that must discover its
+  own context: repo-wide refactors, large diffs, or work spanning many files.
+  Terra keeps near-Sol recall at long context for about 40% of Sol's credit
+  cost, and is the primary spawnable worker while the Luna bug stands. Luna's
+  long-context recall drops sharply at any effort — never route discovery
+  work to Luna.
 - Use `sol_high` (Sol high) for unusually difficult or high-consequence work:
   credential, auth, or security boundaries; concurrency; migrations; protocol
   compatibility; cross-layer invariants; or escalation after a plausible
-  medium-effort failure.
+  terra_xhigh failure.
 - Refer to the exact custom-agent name when delegating.
 - Do not use a generic unnamed child when a configured agent matches the task.
-- Do not use Terra unless the user explicitly requests an experiment.
 - Reserve dynamic per-spawn model, effort, or service-tier overrides for
   explicit experiments; normal work uses the pinned named-agent definitions.
 - Leave the fast service tier off for delegated work: it roughly doubles cost

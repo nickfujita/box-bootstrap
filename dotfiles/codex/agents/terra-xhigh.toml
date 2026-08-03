@@ -1,14 +1,15 @@
-name = "sol_low"
+name = "terra_xhigh"
 description = """
 Implementation worker for tasks that must discover their own context:
 repo-wide refactors, changes spanning many files, large diffs, or work where
-the relevant code has to be found rather than named. Runs Sol at low effort
-for its long-context strength. For bounded, fully-briefed tasks prefer
-luna_worker.
+the relevant code has to be found rather than named. Terra at xhigh keeps
+near-Sol recall at long context for about 40% of Sol's credit cost. Also the
+primary spawnable implementation worker while the Luna spawn bug (#36294)
+stands. Escalate genuinely hard or high-consequence work to sol_high.
 """
 
-model = "gpt-5.6-sol"
-model_reasoning_effort = "low"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """
