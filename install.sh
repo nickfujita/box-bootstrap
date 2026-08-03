@@ -463,6 +463,15 @@ render_claude_settings() {
 
 check_agent_config() {
   local status=0 p
+  # Claude auto-updates only when its install dir is writable; an npm-global
+  # install on a managed box lands in root-owned /usr and silently cannot.
+  if have_cmd claude; then
+    if [ -w "$(dirname "$(command -v claude)")" ]; then
+      ok "claude auto-update works ($(command -v claude))"
+    else
+      warn "claude cannot auto-update — installed at $(command -v claude) (not writable)"; status=1
+    fi
+  fi
   if [ -f "$CLAUDE_SETTINGS" ]; then
     ok "~/.claude/settings.json present"
     grep -q '"model"'      "$CLAUDE_SETTINGS" || { warn "no model pin in settings.json"; status=1; }
@@ -496,6 +505,26 @@ install_agent_config() {
 
   local rendered merged claude p
   mkdir -p "$CLAUDE_DIR"
+
+  # 0. Self-updating Claude install. A managed box installs the CLI with
+  #    `npm install -g` against a NodeSource Node, whose global prefix is
+  #    root-owned /usr — so Claude lands at /usr/bin/claude and its own
+  #    diagnostics report "Can't auto-update: npm global folder isn't writable".
+  #    `claude install` lays down the native build under ~/.local/share/claude
+  #    with a ~/.local/bin symlink, which IS writable, so auto-update works. The
+  #    npm copy is left alone: ~/.local/bin precedes /usr/bin on PATH (the shell
+  #    block guarantees it), so the native build wins and the old one is a
+  #    harmless fallback. Skipped when Claude already runs from a writable dir.
+  if have_cmd claude; then
+    claude="$(command -v claude)"
+    if [ -w "$(dirname "$claude")" ]; then
+      ok "claude runs from a writable dir (${claude}) — auto-update already works"
+    elif claude install >/dev/null 2>&1 && [ -x "${HOME}/.local/bin/claude" ]; then
+      ok "installed the self-updating native Claude build to ~/.local/bin"
+    else
+      warn "could not install the native Claude build; auto-update stays disabled at ${claude}"
+    fi
+  fi
 
   # 1. ~/.claude/settings.json — never clobbered without a backup.
   rendered="$(mktemp)"
