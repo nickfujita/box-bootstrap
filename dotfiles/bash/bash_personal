@@ -1,0 +1,132 @@
+# ~/.bash_personal — portable personal shell config (aliases + helper functions).
+#
+# Installed by box-bootstrap's --shell component and hooked in from
+# ~/.bash_aliases, which the stock Ubuntu ~/.bashrc sources for EVERY interactive
+# shell — login and non-login alike. That distinction is the whole point:
+#
+#   ~/.profile is NOT a safe place for box-bootstrap settings. Spellguard's
+#   managed ~/.profile contains a tmux auto-attach block that `exec`s partway
+#   through, so every line below it never runs in an interactive login. And
+#   tmux panes are non-login shells, which skip ~/.profile entirely.
+#
+# INVARIANT: this file is tracked in the box-bootstrap repository, so it must
+# never contain a secret, an API token, or a host-specific absolute path.
+# Per-box values belong in ~/.bash_box_env (generated, untracked); secrets belong
+# in ~/.bash_secrets (mode 0600, never written by this repo). Both are sourced at
+# the bottom of this file.
+
+# ── General ──────────────────────────────────────────────────────────────────
+mkcd () { mkdir -p "$1" && cd "$1"; }
+r () { source ~/.bashrc; }
+
+# ── Agent CLIs ───────────────────────────────────────────────────────────────
+alias claude='claude --dangerously-skip-permissions'
+alias codex='codex --dangerously-bypass-approvals-and-sandbox'
+
+# ── pnpm ─────────────────────────────────────────────────────────────────────
+pp () { pnpm "$@"; }
+pps () { pnpm start; }
+ppd () { pnpm run dev; }
+ppi () { pnpm install "$@"; }
+ppr () { pnpm run "$@"; }
+ppex () { pnpm exec "$@"; }
+ppx () { pnpm dlx "$@"; }
+npk () { ppx npkill -D -y; }
+export COREPACK_ENABLE_AUTO_PIN=false
+
+# ── npm ──────────────────────────────────────────────────────────────────────
+ni () { npm i; }
+nr () { npm run "$1"; }
+ns () { npm start; }
+nt () { npm test; }
+
+# ── git ──────────────────────────────────────────────────────────────────────
+gclean () { git clean -dfX; }
+gcm () { git add . && git commit -m "$1"; }
+gcmn () { git add . && git commit -m "$1" -n; }
+gpb () { git push origin "$(git branch --show-current)"; }
+gba () { git branch; }
+gb () { git rev-parse --abbrev-ref HEAD; }
+gbl () { git branch --sort=-committerdate; }
+gcf () { git checkout "$1" && git fetch && git pull; }
+gp () { git fetch && git pull origin "$(git branch --show-current)"; }
+gco () { git checkout "$1"; }
+gcob () { git checkout -b "$1"; }
+gs () { git status; }
+gstash () { git add --all && git stash; }
+gmm () { git merge main; }
+glog () { git log; }
+gbclean () { git branch | grep -v "main" | xargs git branch -D; }
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+alias dps="docker ps"
+alias dpsa="docker ps -a"
+drmfa () { docker rm -f $(docker ps -aq); }
+# Compose: newer boxes ship only Compose v2 (`docker compose`) and have no v1
+# `docker-compose` binary, so prefer v1 when it exists and fall back to v2.
+__compose () { if command -v docker-compose >/dev/null 2>&1; then docker-compose "$@"; else docker compose "$@"; fi; }
+dcb () { __compose build "$@"; }
+dcu () { __compose up "$@"; }
+
+# ── Auto-switch Node version on cd (inert unless nvm is installed) ───────────
+cdnvm () {
+  builtin cd "$@" || return
+  if [ -f .nvmrc ] && command -v nvm >/dev/null 2>&1; then
+    local nvm_ver cur_ver
+    nvm_ver=$(cat .nvmrc)
+    cur_ver=$(nvm current 2>/dev/null)
+    if [ "$cur_ver" != "$nvm_ver" ] && [ "$cur_ver" != "v$nvm_ver" ]; then
+      nvm use "$nvm_ver" --silent 2>/dev/null || nvm install "$nvm_ver"
+    fi
+  fi
+}
+alias cd='cdnvm'
+
+# ── Push-notification toggle ─────────────────────────────────────────────────
+notify-on () { rm -f ~/.notifications-off && echo "Push notifications: ON"; }
+notify-off () { touch ~/.notifications-off && echo "Push notifications: OFF"; }
+notify-status () { [ -f ~/.notifications-off ] && echo "Push notifications: OFF" || echo "Push notifications: ON"; }
+
+# ── Node heap for long-running agent CLIs ────────────────────────────────────
+export NODE_OPTIONS="--max-old-space-size=8192"
+
+# ── PATH ─────────────────────────────────────────────────────────────────────
+# These used to be appended to ~/.profile, where they were silently dead (see
+# the header). They live here instead, guarded so they are inert on a box that
+# does not have the directory and never duplicate an entry on a re-source.
+#
+# ~/.local/bin holds go-grip (--gogrip), uv (--with-uv), fd, and any
+# `npm install --global --prefix ~/.local` tool.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+# The Go toolchain installed by --with-go / the Neovim stack.
+case ":$PATH:" in
+  *":/usr/local/go/bin:"*) ;;
+  *) [ -d /usr/local/go/bin ] && export PATH="$PATH:/usr/local/go/bin" ;;
+esac
+
+# ── Per-box values and secrets ───────────────────────────────────────────────
+# ~/.bash_box_env is generated per box by box-bootstrap (e.g. CCMATRIX_VM_LETTER)
+# and is never tracked in the repository.
+if [ -f "$HOME/.bash_box_env" ]; then
+  . "$HOME/.bash_box_env"
+fi
+# ~/.bash_secrets is yours alone: mode 0600, created empty by box-bootstrap and
+# never written to by it. Every API token or credential goes here, never above.
+if [ -f "$HOME/.bash_secrets" ]; then
+  . "$HOME/.bash_secrets"
+fi
+
+# ── Legacy: recover a value stranded below ~/.profile's tmux `exec` ──────────
+# Boxes provisioned before the ~/.bash_box_env change still carry
+# CCMATRIX_VM_LETTER in ~/.profile, below the auto-attach exec, where it never
+# runs. box-bootstrap deliberately does not rewrite an existing ~/.profile, so
+# re-derive the value here instead. Harmless (and a no-op) once the box has been
+# converged with `./install.sh --shell --matrix`.
+if [ -z "${CCMATRIX_VM_LETTER:-}" ] && [ -r "$HOME/.profile" ]; then
+  __vm_letter=$(sed -n "s/^export CCMATRIX_VM_LETTER=//p" "$HOME/.profile" | tail -n1 | tr -d "\"'")
+  [ -n "$__vm_letter" ] && export CCMATRIX_VM_LETTER="$__vm_letter"
+  unset __vm_letter
+fi

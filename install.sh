@@ -9,12 +9,12 @@
 # is already in place, so re-running this script is safe.
 #
 # Usage:
-#   ./install.sh                      # install all four core components
-#   ./install.sh --check              # probe all four core components
+#   ./install.sh                      # install all five core components
+#   ./install.sh --check              # probe all five core components
 #   ./install.sh --gogrip             # only the selected core component(s)
 #   ./install.sh --neovim             # only the complete editor stack
-#   ./install.sh --all                # core four + every --with-* extra
-#   ./install.sh --with-go --with-uv   # core four PLUS optional extras
+#   ./install.sh --all                # core five + every --with-* extra
+#   ./install.sh --with-go --with-uv   # core five PLUS optional extras
 #   ./install.sh --matrix --check     # probe just one component
 #
 # Secrets are read from the environment (see examples/ccmatrix-config.env.example);
@@ -25,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNITS_DIR="${SCRIPT_DIR}/units"
 EXAMPLES_DIR="${SCRIPT_DIR}/examples"
+DOTFILES_DIR="${SCRIPT_DIR}/dotfiles"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 GOGRIP_RELEASE_URL="https://github.com/nickfujita/go-grip/releases/latest/download/go-grip-linux-amd64"
@@ -38,6 +39,22 @@ TS_TAG="tag:cloud-dev"
 CCMATRIX_DIR="${HOME}/.ccmatrix"
 CCMATRIX_CONFIG="${CCMATRIX_DIR}/config.json"
 TMUX_LOCAL="${HOME}/.tmux.conf.local"
+
+BASH_PERSONAL_SOURCE="${DOTFILES_DIR}/bash/bash_personal"
+BASH_PERSONAL="${HOME}/.bash_personal"
+BASH_ALIASES="${HOME}/.bash_aliases"
+BASH_SECRETS="${HOME}/.bash_secrets"
+# Per-box generated values (never tracked in this repo); sourced by bash_personal.
+BASH_BOX_ENV="${HOME}/.bash_box_env"
+# Intentionally single-quoted: the literal line, expanded when the shell reads it.
+# shellcheck disable=SC2016
+BASH_PERSONAL_HOOK='[ -f "$HOME/.bash_personal" ] && . "$HOME/.bash_personal"'
+
+# Spellguard's managed ~/.profile `exec`s into tmux inside this block, so every
+# line BELOW the marker is dead for an interactive login — and tmux panes are
+# non-login shells that never read ~/.profile at all. box-bootstrap therefore
+# writes shell settings to ~/.bash_personal / ~/.bash_box_env, never ~/.profile.
+TMUX_EXEC_MARKER='# >>> spellguard tmux auto-attach >>>'
 
 # The public repo that ships the Claude Code Matrix bridge plugin. Override via
 # the PLUGINS_REPO_URL env var to install from a fork or a local marketplace.
@@ -60,14 +77,167 @@ require_env() {
   fi
 }
 
-# append_profile_once LINE — append LINE to ~/.profile unless it is already there.
-append_profile_once() {
-  local line="$1"
-  grep -qF -- "$line" "${HOME}/.profile" 2>/dev/null || printf '%s\n' "$line" >> "${HOME}/.profile"
+# append_once FILE LINE — append LINE to FILE unless it is already there.
+# Kept byte-identical to scripts/install-neovim.sh's copy; that script stays
+# standalone, so the definition is deliberately duplicated rather than shared.
+append_once() {
+  local file="$1" line="$2"
+  touch "$file"
+  if ! grep -qF -- "$line" "$file" 2>/dev/null; then
+    # Some installers leave profile files without a trailing newline. Do not
+    # concatenate our setting onto their final command.
+    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then
+      printf '\n' >> "$file"
+    fi
+    printf '%s\n' "$line" >> "$file"
+  fi
 }
 
 # Talk to the PERSONAL tailscaled over its private socket (needs root).
 ts_personal() { $SUDO tailscale --socket="$TS_PERSONAL_SOCK" "$@"; }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: personal shell config (~/.bash_personal)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Warn about box-bootstrap exports stranded below ~/.profile's tmux `exec`.
+# Purely diagnostic — it never edits ~/.profile — and only fires on boxes
+# provisioned before shell settings moved out of ~/.profile.
+check_profile_dead_exports() {
+  local profile="${HOME}/.profile" marker_line dead line
+  if [ ! -f "$profile" ]; then
+    ok "no ~/.profile; nothing can be stranded below a tmux exec"
+    return 0
+  fi
+  marker_line="$(grep -nF -- "$TMUX_EXEC_MARKER" "$profile" 2>/dev/null | head -n1 | cut -d: -f1)" || true
+  if [ -z "$marker_line" ]; then
+    ok "~/.profile has no tmux auto-attach block"
+    return 0
+  fi
+  dead="$(tail -n +"$marker_line" "$profile" \
+    | grep -E '^[[:space:]]*export[[:space:]]+(CCMATRIX_VM_LETTER|PATH)=' || true)"
+  if [ -n "$dead" ]; then
+    warn "~/.profile exports below '${TMUX_EXEC_MARKER}' are DEAD (the block execs into tmux, and tmux panes skip ~/.profile entirely):"
+    while IFS= read -r line; do
+      [ -n "$line" ] && warn "    ${line}"
+    done <<< "$dead"
+    warn "    move them to ~/.bash_box_env (per-box) or dotfiles/bash/bash_personal (portable), then re-run './install.sh --shell --matrix'"
+    return 1
+  fi
+  ok "no box-bootstrap exports stranded below the ~/.profile tmux exec"
+  return 0
+}
+
+# The tracked dotfile is committed to a git repository, so a credential in it
+# would be published. Fail loudly rather than ship one.
+check_bash_personal_no_secrets() {
+  local hits
+  hits="$(grep -nE '^[^#]*(TOKEN|SECRET|API_KEY|PASSWORD)[[:space:]]*=' "$BASH_PERSONAL_SOURCE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then
+    warn "dotfiles/bash/bash_personal assigns something credential-shaped — it is tracked in git and must never hold a secret:"
+    printf '%s\n' "$hits" >&2
+    warn "    move it to ~/.bash_secrets (mode 0600, untracked)"
+    return 1
+  fi
+  ok "tracked bash_personal holds no credential-shaped assignment"
+  return 0
+}
+
+check_shell() {
+  local status=0
+  if [ -f "${HOME}/.bashrc" ]; then
+    ok "~/.bashrc present"
+  else
+    warn "~/.bashrc missing"; status=1
+  fi
+
+  if grep -q '\.bash_aliases' "${HOME}/.bashrc" 2>/dev/null; then
+    ok "~/.bashrc sources ~/.bash_aliases"
+  else
+    warn "~/.bashrc does not source ~/.bash_aliases"; status=1
+  fi
+
+  if [ ! -f "$BASH_PERSONAL" ]; then
+    warn "~/.bash_personal missing"; status=1
+  elif cmp -s "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"; then
+    ok "~/.bash_personal matches dotfiles/bash/bash_personal"
+  else
+    warn "~/.bash_personal differs from dotfiles/bash/bash_personal (drift; re-run --shell)"; status=1
+  fi
+
+  if grep -qF -- "$BASH_PERSONAL_HOOK" "$BASH_ALIASES" 2>/dev/null; then
+    ok "~/.bash_aliases sources ~/.bash_personal"
+  else
+    warn "~/.bash_aliases is missing the ~/.bash_personal hook line"; status=1
+  fi
+
+  # Behavioral: assert in the shell type that actually failed — a NON-LOGIN
+  # interactive bash, which is what a tmux pane runs and what never reads
+  # ~/.profile. A green structural check with a red arm here is the exact
+  # failure this component exists to prevent.
+  if env -i HOME="$HOME" TERM=dumb bash -ic 'type dps' >/dev/null 2>&1; then
+    ok "a non-login interactive shell sees the personal config (type dps)"
+  else
+    warn "a non-login interactive shell does NOT see 'dps' — ~/.bash_personal is not reaching tmux panes"; status=1
+  fi
+
+  # Diagnostic only — deliberately does NOT set status. box-bootstrap refuses to
+  # rewrite a pre-existing ~/.profile, so a legacy box could never make this arm
+  # green, and a permanently-red --check trains people to ignore it. Once the
+  # arms above pass, those stranded lines are dead cruft rather than a live
+  # defect: ~/.bash_personal supersedes every one of them. A box that genuinely
+  # is not getting its settings fails the four structural arms and the
+  # behavioral arm anyway.
+  check_profile_dead_exports || true
+  check_bash_personal_no_secrets || status=1
+  return $status
+}
+
+install_shell() {
+  log "Component: personal shell config (~/.bash_personal)"
+
+  [ -f "$BASH_PERSONAL_SOURCE" ] || die "tracked shell config missing: ${BASH_PERSONAL_SOURCE}"
+
+  # 1. Seed ~/.bashrc from the distro skeleton ONLY when it is absent. An
+  #    existing ~/.bashrc is the user's (or Spellguard's); never clobber it.
+  if [ -f "${HOME}/.bashrc" ]; then
+    ok "~/.bashrc already present; left untouched"
+  elif [ -f /etc/skel/.bashrc ]; then
+    install -m 0644 /etc/skel/.bashrc "${HOME}/.bashrc"
+    ok "seeded ~/.bashrc from /etc/skel/.bashrc"
+  else
+    warn "~/.bashrc is missing and /etc/skel/.bashrc does not exist; create one or ~/.bash_personal will never be sourced"
+  fi
+
+  # 2. Install the tracked personal config. Whole-file replace (the repo copy is
+  #    the source of truth, as with dotfiles/nvim), no-op when already identical.
+  if cmp -s "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"; then
+    ok "~/.bash_personal already matches the repository copy"
+  else
+    install -m 0644 "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"
+    ok "installed ~/.bash_personal (mode 0644) from dotfiles/bash/bash_personal"
+  fi
+
+  # 3. Hook it in through ~/.bash_aliases, which the stock Ubuntu ~/.bashrc
+  #    sources for every interactive shell — login and non-login alike.
+  #    append_once, so the neovim component's "alias n='nvim'" line survives.
+  append_once "$BASH_ALIASES" "$BASH_PERSONAL_HOOK"
+  ok "~/.bash_aliases sources ~/.bash_personal"
+
+  # 4. Create the secrets file at 0600 if absent. box-bootstrap NEVER writes
+  #    into it — it exists so there is an obvious place for tokens that is not
+  #    this repository.
+  if [ -f "$BASH_SECRETS" ]; then
+    chmod 600 "$BASH_SECRETS"
+    ok "~/.bash_secrets present; left untouched (mode 0600 enforced)"
+  else
+    install -m 600 /dev/null "$BASH_SECRETS"
+    ok "created empty ~/.bash_secrets (mode 0600) — put tokens there, never in the repo"
+  fi
+
+  # 5. Report, but do not fix, settings stranded in a pre-existing ~/.profile.
+  check_profile_dead_exports || true
+}
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Component: personal tailscaled (userspace networking)
@@ -217,10 +387,12 @@ check_matrix() {
   else
     warn "ccmatrix config missing"; status=1
   fi
-  if grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER exported in ~/.profile"
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BASH_BOX_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER exported in ~/.bash_box_env"
+  elif grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
+    warn "CCMATRIX_VM_LETTER lives only in ~/.profile (legacy: dead below the tmux exec; ~/.bash_personal re-derives it). Re-run '--matrix' with CCMATRIX_VM_LETTER set to migrate it."; status=1
   else
-    warn "CCMATRIX_VM_LETTER not exported in ~/.profile"; status=1
+    warn "CCMATRIX_VM_LETTER not exported in ~/.bash_box_env"; status=1
   fi
   if [ -f "$TMUX_LOCAL" ]; then ok "${TMUX_LOCAL} present"; else warn "${TMUX_LOCAL} missing"; status=1; fi
   if command -v codex-matrix >/dev/null 2>&1; then ok "codex-matrix CLI available"; else warn "codex-matrix CLI not found"; status=1; fi
@@ -291,17 +463,22 @@ install_matrix() {
     ok "wrote ${CCMATRIX_CONFIG} (mode 0600, proxy ${proxy})"
   fi
 
-  # 4. Export CCMATRIX_VM_LETTER into ~/.profile (append once).
-  if grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER already exported in ~/.profile"
+  # 4. Export CCMATRIX_VM_LETTER into ~/.bash_box_env (append once).
+  #    NOT ~/.profile: Spellguard's managed ~/.profile execs into tmux partway
+  #    through, so anything appended after that block never runs, and tmux panes
+  #    are non-login shells that skip ~/.profile entirely. ~/.bash_box_env is
+  #    sourced by ~/.bash_personal, which every interactive shell reads.
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BASH_BOX_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER already exported in ~/.bash_box_env"
   else
     require_env CCMATRIX_VM_LETTER "Single-letter id for this box (e.g. a)."
-    {
-      printf '\n# box-bootstrap: identify this cloud dev box\n'
-      printf 'export CCMATRIX_VM_LETTER=%q\n' "$CCMATRIX_VM_LETTER"
-    } >> "${HOME}/.profile"
-    ok "appended CCMATRIX_VM_LETTER to ~/.profile"
+    append_once "$BASH_BOX_ENV" '# box-bootstrap: per-box values, sourced from ~/.bash_personal. Not tracked in git.'
+    append_once "$BASH_BOX_ENV" "$(printf 'export CCMATRIX_VM_LETTER=%q' "$CCMATRIX_VM_LETTER")"
+    chmod 0644 "$BASH_BOX_ENV"
+    ok "appended CCMATRIX_VM_LETTER to ~/.bash_box_env"
   fi
+  [ -f "$BASH_PERSONAL" ] \
+    || warn "~/.bash_personal is not installed, so nothing sources ~/.bash_box_env yet; run './install.sh --shell'"
 
   # 5. Install personal tmux overrides — only if absent.
   #    Spellguard REWRITES ~/.tmux.conf on every bootstrap, but never touches
@@ -340,11 +517,15 @@ install_go() {
   $SUDO rm -rf /usr/local/go
   $SUDO tar -C /usr/local -xzf "${tmp}/${tgz}"
   rm -rf "$tmp"
-  # Intentionally single-quoted: write the literal line so $PATH expands when
-  # ~/.profile is sourced, not now.
-  # shellcheck disable=SC2016
-  append_profile_once 'export PATH=$PATH:/usr/local/go/bin'
-  ok "Go ${ver} installed to /usr/local/go (open a new shell or 'source ~/.profile')"
+  # No PATH line is written here. The tracked dotfiles/bash/bash_personal already
+  # puts /usr/local/go/bin on PATH, guarded on the directory existing — and that
+  # file is read by every interactive shell, including tmux panes. ~/.profile is
+  # not (Spellguard's copy execs into tmux partway through).
+  export PATH="${PATH}:/usr/local/go/bin"
+  hash -r
+  [ -f "$BASH_PERSONAL" ] \
+    || warn "~/.bash_personal is not installed, so new shells will not see /usr/local/go/bin; run './install.sh --shell'"
+  ok "Go ${ver} installed to /usr/local/go (open a new shell to pick it up)"
 }
 
 install_docker() {
@@ -376,7 +557,8 @@ box-bootstrap — personalize a Spellguard-managed cloud dev box (idempotent).
 
 Usage: ./install.sh [--check] [components] [extras]
 
-Core components (default: all four run when none are named):
+Core components (default: all five run when none are named):
+  --shell         Personal Bash config (~/.bash_personal + ~/.bash_secrets)
   --tailscale     Second, personal tailscaled (userspace networking)
   --gogrip        go-grip markdown preview user service
   --matrix        Matrix bridge plugin + ccmatrix config
@@ -388,7 +570,7 @@ Optional extras (off unless requested):
   --with-uv       Install uv (astral.sh installer)
 
 Modifiers:
-  --all           Core four + every extra
+  --all           Core five + every extra
   --check         Probe selected components and report; change nothing
   -h, --help      Show this help
 
@@ -396,12 +578,13 @@ Secrets come from the environment; see examples/ccmatrix-config.env.example.
 EOF
 }
 
-DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
+DO_SHELL=0; DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
 DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0
 CHECK_ONLY=0; CORE_SELECTED=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --shell)       DO_SHELL=1; CORE_SELECTED=1 ;;
     --tailscale)   DO_TAILSCALE=1; CORE_SELECTED=1 ;;
     --gogrip)      DO_GOGRIP=1; CORE_SELECTED=1 ;;
     --matrix)      DO_MATRIX=1; CORE_SELECTED=1 ;;
@@ -411,7 +594,7 @@ while [ $# -gt 0 ]; do
     --with-uv)     DO_UV=1 ;;
     # Backward-compatible alias from when Neovim was an optional extra.
     --with-neovim) DO_NEOVIM=1 ;;
-    --all)         DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_GO=1; DO_DOCKER=1; DO_UV=1; DO_NEOVIM=1; CORE_SELECTED=1 ;;
+    --all)         DO_SHELL=1; DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_GO=1; DO_DOCKER=1; DO_UV=1; DO_NEOVIM=1; CORE_SELECTED=1 ;;
     --check)       CHECK_ONLY=1 ;;
     -h|--help)     usage; exit 0 ;;
     *)             die "unknown option: $1 (see --help)" ;;
@@ -419,15 +602,18 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Default to all four core components when none was specifically selected.
+# Default to all five core components when none was specifically selected.
+# --shell qualifies as core: it is pure personalization — no network, no
+# privilege, no secrets.
 if [ "$CORE_SELECTED" -eq 0 ]; then
-  DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
+  DO_SHELL=1; DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
 fi
 
 main() {
   local rc=0
   if [ "$CHECK_ONLY" -eq 1 ]; then
     log "Probing selected components (no changes will be made)"
+    [ "$DO_SHELL"     -eq 1 ] && { printf -- '── shell ──\n';      check_shell     || rc=1; }
     [ "$DO_TAILSCALE" -eq 1 ] && { printf -- '── tailscale ──\n'; check_tailscale || rc=1; }
     [ "$DO_GOGRIP"    -eq 1 ] && { printf -- '── go-grip ──\n';    check_gogrip    || rc=1; }
     [ "$DO_MATRIX"    -eq 1 ] && { printf -- '── matrix ──\n';     check_matrix    || rc=1; }
@@ -439,6 +625,7 @@ main() {
     return $rc
   fi
 
+  [ "$DO_SHELL"     -eq 1 ] && install_shell
   [ "$DO_TAILSCALE" -eq 1 ] && install_tailscale
   [ "$DO_GOGRIP"    -eq 1 ] && install_gogrip
   [ "$DO_MATRIX"    -eq 1 ] && install_matrix

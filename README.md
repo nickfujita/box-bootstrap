@@ -6,10 +6,11 @@ tailnet, `~/.tmux.conf`, and the kernel `tailscaled` it bootstraps. This repo
 layers *your* personal tooling on top **without touching anything Spellguard
 manages**, and it is safe to re-run — every step is a no-op once it is in place.
 
-It installs four core components (all on by default) plus optional extras:
+It installs five core components (all on by default) plus optional extras:
 
 | Component | What it does |
 |-----------|--------------|
+| **shell** | Installs the tracked personal Bash config to `~/.bash_personal` (aliases, helper functions, PATH), hooks it in through `~/.bash_aliases`, and creates an empty `~/.bash_secrets` at mode 0600. |
 | **tailscale** | A *second*, personal `tailscaled` on a **personal tailnet**, in userspace-networking mode, alongside the org-managed daemon. |
 | **gogrip** | Installs the [go-grip](https://github.com/nickfujita/go-grip) release binary and runs it as a systemd **user** service (markdown preview on port 6419, nightshade theme). |
 | **matrix** | Adds the Claude Code Matrix-bridge plugin, enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
@@ -45,13 +46,14 @@ $EDITOR ~/bootstrap.env
 
 # 2. Load it and run the installer.
 set -a; . ~/bootstrap.env; set +a
-./install.sh                 # core four, including the complete Neovim setup
+./install.sh                 # core five, including the complete Neovim setup
 
 # Or select components / add extras:
 ./install.sh --gogrip                    # just one core component
+./install.sh --shell                     # just the personal Bash config
 ./install.sh --neovim                    # just the complete editor setup
-./install.sh --with-go --with-uv         # core four + extras
-./install.sh --all                       # core four + every extra
+./install.sh --with-go --with-uv         # core five + extras
+./install.sh --all                       # core five + every extra
 
 # Install only the editor, without any core box components:
 ./scripts/install-neovim.sh
@@ -80,10 +82,75 @@ needs is missing.
 | `CCMATRIX_ACCESS_TOKEN` | matrix | Yes, unless config exists |
 | `CCMATRIX_ADMIN_USER_ID` | matrix | Yes, unless config exists |
 | `CCMATRIX_PROXY_URL` | matrix | No — defaults to `http://127.0.0.1:1055` |
-| `CCMATRIX_VM_LETTER` | matrix | Yes, unless already exported in `~/.profile` |
+| `CCMATRIX_VM_LETTER` | matrix | Yes, unless already exported in `~/.bash_box_env` |
 | `PLUGINS_REPO_URL` | matrix | No — defaults to `nickfujita/matrix-bridge-plugin` |
 
 ## What each component does
+
+### shell (personal Bash config)
+
+[`dotfiles/bash/bash_personal`](dotfiles/bash/bash_personal) is the source of
+truth for aliases, helper functions, and PATH. The component:
+
+1. Seeds `~/.bashrc` from `/etc/skel/.bashrc` **only if it is absent** (an
+   existing one is never clobbered).
+2. Installs the tracked file to `~/.bash_personal` at mode 0644 — a whole-file
+   replace, so the repo copy wins and local drift is converged away (a no-op
+   when the two already match).
+3. Appends the hook line
+   `[ -f "$HOME/.bash_personal" ] && . "$HOME/.bash_personal"` to
+   `~/.bash_aliases`, once. Ubuntu's stock `~/.bashrc` sources `~/.bash_aliases`
+   for **every interactive shell**, login and non-login alike.
+4. Creates an empty `~/.bash_secrets` at mode **0600** if it does not exist.
+
+#### The three files, and which one your value belongs in
+
+| File | Tracked in git? | Mode | Holds |
+|------|-----------------|------|-------|
+| `~/.bash_personal` | **Yes** — `dotfiles/bash/bash_personal` | 0644 | Aliases, functions, non-sensitive exports. Portable across every box. |
+| `~/.bash_box_env` | No — generated per box | 0644 | Per-box values, e.g. `CCMATRIX_VM_LETTER`. Sourced from `~/.bash_personal`. |
+| `~/.bash_secrets` | **Never** — gitignored | 0600 | Every API token, key, and credential. box-bootstrap creates it empty and **never writes into it**. |
+
+**The rule: a secret goes in `~/.bash_secrets`, never in the repo.** A
+credential committed to `dotfiles/bash/bash_personal` would be published with
+the repository, so `./install.sh --shell --check` fails outright if the tracked
+file assigns anything matching `TOKEN=`, `SECRET=`, `API_KEY=`, or `PASSWORD=`
+outside a comment. A host-specific absolute path does not belong there either —
+that is what `~/.bash_box_env` is for.
+
+#### Why not `~/.profile`? (Read this before adding an export.)
+
+**Do not put box-bootstrap settings in `~/.profile`. They will silently never
+run.** Two independent reasons:
+
+1. Spellguard's managed `~/.profile` contains a tmux auto-attach block that
+   **`exec`s into tmux partway through the file**. Every line below that block
+   is dead for an interactive login — the `exec` replaces the shell before the
+   file finishes.
+2. tmux panes are **non-login** shells (neither `~/.tmux.conf` nor
+   `~/.tmux.conf.local` sets a `default-command`), and a non-login shell never
+   reads `~/.profile` at all.
+
+So an `export` appended to the end of `~/.profile` runs in neither case. This
+was a real bug: `CCMATRIX_VM_LETTER` and the `~/.local/bin` and
+`/usr/local/go/bin` PATH entries all sat below the exec, which is why a
+`~/.local/bin` binary could be "command not found" inside tmux while the export
+was plainly visible in `~/.profile`.
+
+box-bootstrap therefore writes shell settings to `~/.bash_personal` (portable)
+or `~/.bash_box_env` (per-box) and **no longer writes to `~/.profile` at all**.
+Lines an earlier version already appended there are deliberately left alone —
+rewriting a user's `~/.profile` is not this repo's business — and
+`--check` reports them as a diagnostic so you know they are inert.
+`~/.bash_personal` re-derives a legacy `CCMATRIX_VM_LETTER` from `~/.profile`,
+so a box provisioned before this change keeps working without intervention.
+
+The `--check` arm that matters is behavioral, not structural — it asserts in the
+exact shell type that failed:
+
+```bash
+env -i HOME="$HOME" TERM=dumb bash -ic 'type dps'   # a non-login interactive bash
+```
 
 ### tailscale (personal, userspace)
 
@@ -112,7 +179,8 @@ port 6419 with the built-in `nightshade` theme).
    `codex-matrix enable`.
 2. Writes `~/.ccmatrix/config.json` at mode **0600** from the `CCMATRIX_*` env
    vars — only if it does not already exist.
-3. Appends `export CCMATRIX_VM_LETTER=…` to `~/.profile` (once).
+3. Appends `export CCMATRIX_VM_LETTER=…` to `~/.bash_box_env` (once) — **not**
+   `~/.profile`; see [Why not `~/.profile`?](#why-not-profile-read-this-before-adding-an-export).
 4. Installs [`examples/tmux.conf.local.example`](examples/tmux.conf.local.example)
    to `~/.tmux.conf.local` **only if absent**.
 
@@ -260,14 +328,16 @@ selected component as satisfied or not and changes nothing (exit non-zero if any
 selected component is incomplete). Re-running `./install.sh` is a no-op when
 everything is already in place: binaries/units are only (re)written when missing
 or changed, core service config files are never clobbered, and `tailscale up` /
-service enables are skipped when already active. The Neovim config is the one
-exception: once marked as managed, it deliberately converges to the checked-in
-copy so all VMs stay consistent.
+service enables are skipped when already active. The two captured dotfile sets
+are the deliberate exceptions: the Neovim config (once marked as managed) and
+`~/.bash_personal` both converge back to the checked-in copy so all VMs stay
+consistent — make lasting changes in `dotfiles/`, not on the box.
 
 ## Repo layout
 
 ```
 install.sh                              # the idempotent installer
+dotfiles/bash/bash_personal             # tracked personal shell config (no secrets)
 dotfiles/nvim/                          # captured LazyVim configuration + lock
 scripts/install-neovim.sh               # standalone full editor installer
 scripts/bootstrap-nvim.lua              # headless Mason/Tree-sitter installer

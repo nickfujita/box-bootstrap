@@ -1,0 +1,17 @@
+# Never track shell secrets. ~/.bash_secrets (mode 0600) is created empty by
+# the --shell component and is the only place a token belongs; if a copy is ever
+# staged into the repo by accident, keep git from taking it.
+dotfiles/bash/bash_secrets*
+
+# Per-box generated values (e.g. CCMATRIX_VM_LETTER). Written to ~/.bash_box_env
+# by the --matrix component and sourced from the tracked bash_personal; the
+# values are box-specific, so they are deliberately not versioned.
+bash_box_env
+*.bash_box_env
+dotfiles/bash/bash_box_env
+
+# Runtime env files holding TS_AUTHKEY / CCMATRIX_ACCESS_TOKEN. The tracked
+# template is examples/ccmatrix-config.env.example.
+bootstrap.env
+*.env
+!examples/*.env.example
