@@ -1197,11 +1197,19 @@ main() {
 
   [ "$DO_TAILSCALE" -eq 1 ] && install_tailscale
   [ "$DO_GOGRIP"    -eq 1 ] && install_gogrip
-  [ "$DO_MATRIX"    -eq 1 ] && install_matrix
   # Shell first (it puts ~/.local/bin on PATH), then the notifier scripts the
   # Claude hooks point at, then the two agent harnesses.
   [ "$DO_SHELL"          -eq 1 ] && install_shell
+  # Notifications MUST run before the Matrix bridge. `codex-matrix enable`
+  # captures whatever ~/.codex/config.toml's `notify` key points at and fans out
+  # to it from its own wrapper; if the notifier does not exist yet there is
+  # nothing to capture, and the box ends up with a bridge wrapper that has no
+  # passthrough — Codex->Moshi silently never fires. That is exactly the state
+  # cloud-dev-2 was provisioned into (2026-08-19). Re-running the bridge later
+  # does NOT repair it: _install_notify_hook short-circuits once `notify`
+  # already points at its own wrapper.
   [ "$DO_NOTIFICATIONS"  -eq 1 ] && install_notifications
+  [ "$DO_MATRIX"    -eq 1 ] && install_matrix
   [ "$DO_AGENT_CONFIG"   -eq 1 ] && install_agent_config
   [ "$DO_CODEX_CONFIG"   -eq 1 ] && install_codex_config
   [ "$DO_GLOBAL_INSTRUCTIONS" -eq 1 ] && install_global_instructions
