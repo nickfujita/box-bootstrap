@@ -339,10 +339,11 @@ check_matrix() {
   else
     warn "ccmatrix config missing"; status=1
   fi
-  if grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER exported in ~/.profile"
-  else
-    warn "CCMATRIX_VM_LETTER not exported in ~/.profile"; status=1
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BOX_SHELL_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER exported in ${BOX_SHELL_ENV}"
+  elif grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
+    # Legacy location. It is almost certainly DEAD: see install_matrix step 4.
+    warn "CCMATRIX_VM_LETTER is in ~/.profile (legacy, and dead below the tmux exec) — re-run './install.sh --matrix' to move it to ${BOX_SHELL_ENV}"; status=1
   fi
   if [ -f "$TMUX_LOCAL" ]; then ok "${TMUX_LOCAL} present"; else warn "${TMUX_LOCAL} missing"; status=1; fi
   if command -v codex-matrix >/dev/null 2>&1; then ok "codex-matrix CLI available"; else warn "codex-matrix CLI not found"; status=1; fi
@@ -413,16 +414,26 @@ install_matrix() {
     ok "wrote ${CCMATRIX_CONFIG} (mode 0600, proxy ${proxy})"
   fi
 
-  # 4. Export CCMATRIX_VM_LETTER into ~/.profile (append once).
-  if grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER already exported in ~/.profile"
+  # 4. Export CCMATRIX_VM_LETTER into the per-box shell env (append once).
+  #
+  # NOT ~/.profile. Spellguard's managed ~/.profile `exec`s into tmux partway
+  # through, so anything appended after that block never runs for an interactive
+  # login — and tmux panes are non-login shells that skip ~/.profile entirely.
+  # Verified live on a managed box (2026-08-19): the letter was plainly present
+  # in ~/.profile and completely absent from the pane's environment. The --shell
+  # component's ~/.bashrc block already sources BOX_SHELL_ENV, so writing here
+  # reaches both shell types with no new mechanism.
+  install -d -m 700 "$BOX_CONF_DIR"
+  [ -f "$BOX_SHELL_ENV" ] || install -m 600 /dev/null "$BOX_SHELL_ENV"
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BOX_SHELL_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER already exported in ${BOX_SHELL_ENV}"
   else
     require_env CCMATRIX_VM_LETTER "Single-letter id for this box (e.g. a)."
     {
       printf '\n# box-bootstrap: identify this cloud dev box\n'
       printf 'export CCMATRIX_VM_LETTER=%q\n' "$CCMATRIX_VM_LETTER"
-    } >> "${HOME}/.profile"
-    ok "appended CCMATRIX_VM_LETTER to ~/.profile"
+    } >> "$BOX_SHELL_ENV"
+    ok "appended CCMATRIX_VM_LETTER to ${BOX_SHELL_ENV}"
   fi
 
   # 5. Install personal tmux overrides — only if absent.
@@ -719,6 +730,39 @@ check_shell() {
   else
     ok "${BOX_SHELL_ENV} absent (optional)"
   fi
+
+  # Behavioral arm — assert in the shell type that actually breaks. Every check
+  # above is structural, and structural checks are exactly how the ~/.profile
+  # problem below went unnoticed for so long. A tmux pane is a NON-LOGIN
+  # interactive bash: it reads ~/.bashrc and never ~/.profile.
+  if env -i HOME="$HOME" TERM=dumb bash -ic 'type dps' >/dev/null 2>&1; then
+    ok "a non-login interactive shell sees the block (type dps)"
+  else
+    warn "a non-login interactive shell does NOT see the block — tmux panes will be missing the aliases/PATH"; status=1
+  fi
+
+  # Diagnostic only; never edits ~/.profile. Spellguard's managed ~/.profile
+  # execs into tmux, so box-bootstrap settings appended below that marker are
+  # dead for interactive logins and unread by panes. Fires on boxes provisioned
+  # before those settings moved to ~/.bashrc / BOX_SHELL_ENV.
+  local marker='# >>> spellguard tmux auto-attach >>>' marker_line dead
+  if [ -f "${HOME}/.profile" ]; then
+    marker_line="$(grep -nF -- "$marker" "${HOME}/.profile" 2>/dev/null | head -n1 | cut -d: -f1)" || true
+    if [ -n "${marker_line:-}" ]; then
+      dead="$(tail -n +"$marker_line" "${HOME}/.profile" \
+        | grep -E '^[[:space:]]*export[[:space:]]+(CCMATRIX_VM_LETTER|PATH)=' || true)"
+      if [ -n "$dead" ]; then
+        warn "~/.profile has box-bootstrap exports BELOW the tmux exec — they never run. Re-run './install.sh --shell --matrix' to relocate them:"
+        printf '%s\n' "$dead" >&2
+        status=1
+      else
+        ok "no box-bootstrap exports stranded below the ~/.profile tmux exec"
+      fi
+    else
+      ok "~/.profile has no tmux auto-attach block"
+    fi
+  fi
+
   return $status
 }
 

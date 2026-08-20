@@ -372,9 +372,13 @@ install_go_toolchain() {
   "${SUDO[@]}" rm -rf /usr/local/go
   "${SUDO[@]}" tar -C /usr/local -xzf "${tmp}/${asset}"
   rm -rf "$tmp"
+  # ~/.bashrc, NOT ~/.profile: a Spellguard-managed ~/.profile execs into tmux
+  # partway through (so later lines never run), and tmux panes are non-login
+  # shells that skip ~/.profile entirely. The --shell component's block lands in
+  # ~/.bashrc for the same reason.
   # Intentionally preserve the variables for expansion by future shells.
   # shellcheck disable=SC2016
-  append_once "${HOME}/.profile" 'export PATH="$PATH:/usr/local/go/bin"'
+  append_once "${HOME}/.bashrc" 'export PATH="$PATH:/usr/local/go/bin"'
   export PATH="${PATH}:/usr/local/go/bin"
   hash -r
   ok "installed Go ${GO_VERSION}"
@@ -473,9 +477,14 @@ install_fd_alias() {
 }
 
 install_shell_integration() {
+  # ~/.bashrc, NOT ~/.profile. A Spellguard-managed ~/.profile execs into tmux
+  # partway through, so everything appended below that block silently never
+  # runs — and tmux panes are non-login shells that never read ~/.profile at
+  # all. That is what made ~/.local/bin binaries "command not found" inside
+  # tmux even though the export was plainly there in ~/.profile.
   # Intentionally preserve the variables for expansion by future shells.
   # shellcheck disable=SC2016
-  append_once "${HOME}/.profile" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_once "${HOME}/.bashrc" 'export PATH="$HOME/.local/bin:$PATH"'
   if ! nvim_alias_present; then
     # Ubuntu's stock ~/.bashrc already sources this file when it exists.
     append_once "${HOME}/.bash_aliases" 'alias n='\''nvim'\'''
