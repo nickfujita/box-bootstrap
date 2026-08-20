@@ -6,16 +6,29 @@ tailnet, `~/.tmux.conf`, and the kernel `tailscaled` it bootstraps. This repo
 layers *your* personal tooling on top **without touching anything Spellguard
 manages**, and it is safe to re-run — every step is a no-op once it is in place.
 
-It installs five core components (all on by default) plus optional extras:
+It installs four core components (all on by default), six opt-in
+agent-environment components, plus optional extras:
 
 | Component | What it does |
 |-----------|--------------|
-| **shell** | Installs the tracked personal Bash config to `~/.bash_personal` (aliases, helper functions, PATH), hooks it in through `~/.bash_aliases`, and creates an empty `~/.bash_secrets` at mode 0600. |
 | **tailscale** | A *second*, personal `tailscaled` on a **personal tailnet**, in userspace-networking mode, alongside the org-managed daemon. |
 | **gogrip** | Installs the [go-grip](https://github.com/nickfujita/go-grip) release binary and runs it as a systemd **user** service (markdown preview on port 6419, nightshade theme). |
 | **matrix** | Adds the Claude Code Matrix-bridge plugin, enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
 | **neovim** | Installs the complete captured Neovim/LazyVim editor, language toolchains, LSPs, and supporting CLI tools. |
 | *extras* | `--with-go`, `--with-docker`, `--with-uv` — standalone toolchain installs. |
+
+Agent-environment components — **opt in** with the flag, or take all six with
+`--agents`. They are off by default because they write files a managed box may
+already have opinions about:
+
+| Component | What it does |
+|-----------|--------------|
+| **agent-config** | `~/.claude/settings.json` (model pin, effort level, attribution-blocker hook, notification hooks) + the four official Claude plugins. |
+| **codex-config** | `~/.codex` portable config keys, the four custom agents, the reconciliation skill, and the Codex plugins. |
+| **shell** | One marker-guarded block in `~/.bashrc`: PATH, agent aliases, the alias/function suite, Node heap, nvm auto-use, pnpm and Go PATH. |
+| **dark-factory** | `just`, `agent-browser` + its Chromium build, and the [dark-factory](https://github.com/nickfujita/dark-factory) skills in `~/.claude/skills` and `~/.codex/skills`. |
+| **notifications** | `~/.local/bin/notify-*.sh` push hooks for Claude and Codex, with the webhook credential kept in a separate 0600 file. |
+| **global-instructions** | `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` rendered from vendored templates. |
 
 ## The two-daemon model
 
@@ -40,26 +53,28 @@ the exact invocation.
 
 ```bash
 # 1. Fill in your runtime env (secrets stay OUT of this repo).
-cp examples/ccmatrix-config.env.example ~/bootstrap.env
+cp examples/bootstrap.env.example ~/bootstrap.env
 chmod 600 ~/bootstrap.env
 $EDITOR ~/bootstrap.env
 
 # 2. Load it and run the installer.
 set -a; . ~/bootstrap.env; set +a
-./install.sh                 # core five, including the complete Neovim setup
+./install.sh                 # core four, including the complete Neovim setup
 
 # Or select components / add extras:
 ./install.sh --gogrip                    # just one core component
-./install.sh --shell                     # just the personal Bash config
 ./install.sh --neovim                    # just the complete editor setup
-./install.sh --with-go --with-uv         # core five + extras
-./install.sh --all                       # core five + every extra
+./install.sh --agents                    # the six agent-environment components
+./install.sh --shell --notifications     # just those two
+./install.sh --with-go --with-uv         # core four + extras
+./install.sh --all                       # core four + agents six + every extra
 
 # Install only the editor, without any core box components:
 ./scripts/install-neovim.sh
 
 # 3. Verify without changing anything:
 ./install.sh --check
+./install.sh --agents --check
 ./scripts/install-neovim.sh --check
 ```
 
@@ -69,88 +84,32 @@ Run `./install.sh --help` for the full flag list.
 
 All secrets are read from the environment — nothing sensitive is ever written
 into this repo. See
-[`examples/ccmatrix-config.env.example`](examples/ccmatrix-config.env.example)
+[`examples/bootstrap.env.example`](examples/bootstrap.env.example)
 for the complete list. The installer refuses with a clear message if a value it
 needs is missing.
 
 | Variable | Used by | Required |
 |----------|---------|----------|
 | `TS_AUTHKEY` | tailscale | Yes, unless the personal tailnet is already up |
-| `BOX_NAME` | tailscale | Yes, unless already up |
+| `BOX_NAME` | tailscale, global-instructions | Yes, unless already up / `GOGRIP_BASE_URL` is set |
 | `CCMATRIX_HOMESERVER` | matrix | Yes, unless `~/.ccmatrix/config.json` exists |
 | `CCMATRIX_USER_ID` | matrix | Yes, unless config exists |
 | `CCMATRIX_ACCESS_TOKEN` | matrix | Yes, unless config exists |
 | `CCMATRIX_ADMIN_USER_ID` | matrix | Yes, unless config exists |
 | `CCMATRIX_PROXY_URL` | matrix | No — defaults to `http://127.0.0.1:1055` |
-| `CCMATRIX_VM_LETTER` | matrix | Yes, unless already exported in `~/.bash_box_env` |
+| `CCMATRIX_VM_LETTER` | matrix | Yes, unless already exported in `~/.profile` |
 | `PLUGINS_REPO_URL` | matrix | No — defaults to `nickfujita/matrix-bridge-plugin` |
+| `MOSHI_WEBHOOK_URL` | notifications | Yes, unless `~/.config/moshi/webhook.env` exists |
+| `MOSHI_WEBHOOK_TOKEN` | notifications | No — omit for an endpoint that authenticates by URL alone |
+| `PERSONAL_TAILNET` | global-instructions | Yes, unless `GOGRIP_BASE_URL` is set |
+| `GOGRIP_BASE_URL` | global-instructions | No — assembled from `BOX_NAME` + `PERSONAL_TAILNET` |
+| `CLOUDFLARE_API_TOKEN` | shell | No — needed for wrangler / Spellguard dev-stack deploys |
+| `NODE_MAX_OLD_SPACE_MB` | shell | No — defaults to `12288` |
+| `DARK_FACTORY_REPO_URL` | dark-factory | No — defaults to the public `nickfujita/dark-factory` |
+| `SUPERPOWERS_MARKETPLACE_URL` | codex-config | No — defaults to `obra/superpowers.git` |
+| `CLAUDE_MARKETPLACE` | agent-config | No — defaults to `anthropics/claude-plugins-official` |
 
 ## What each component does
-
-### shell (personal Bash config)
-
-[`dotfiles/bash/bash_personal`](dotfiles/bash/bash_personal) is the source of
-truth for aliases, helper functions, and PATH. The component:
-
-1. Seeds `~/.bashrc` from `/etc/skel/.bashrc` **only if it is absent** (an
-   existing one is never clobbered).
-2. Installs the tracked file to `~/.bash_personal` at mode 0644 — a whole-file
-   replace, so the repo copy wins and local drift is converged away (a no-op
-   when the two already match).
-3. Appends the hook line
-   `[ -f "$HOME/.bash_personal" ] && . "$HOME/.bash_personal"` to
-   `~/.bash_aliases`, once. Ubuntu's stock `~/.bashrc` sources `~/.bash_aliases`
-   for **every interactive shell**, login and non-login alike.
-4. Creates an empty `~/.bash_secrets` at mode **0600** if it does not exist.
-
-#### The three files, and which one your value belongs in
-
-| File | Tracked in git? | Mode | Holds |
-|------|-----------------|------|-------|
-| `~/.bash_personal` | **Yes** — `dotfiles/bash/bash_personal` | 0644 | Aliases, functions, non-sensitive exports. Portable across every box. |
-| `~/.bash_box_env` | No — generated per box | 0644 | Per-box values, e.g. `CCMATRIX_VM_LETTER`. Sourced from `~/.bash_personal`. |
-| `~/.bash_secrets` | **Never** — gitignored | 0600 | Every API token, key, and credential. box-bootstrap creates it empty and **never writes into it**. |
-
-**The rule: a secret goes in `~/.bash_secrets`, never in the repo.** A
-credential committed to `dotfiles/bash/bash_personal` would be published with
-the repository, so `./install.sh --shell --check` fails outright if the tracked
-file assigns anything matching `TOKEN=`, `SECRET=`, `API_KEY=`, or `PASSWORD=`
-outside a comment. A host-specific absolute path does not belong there either —
-that is what `~/.bash_box_env` is for.
-
-#### Why not `~/.profile`? (Read this before adding an export.)
-
-**Do not put box-bootstrap settings in `~/.profile`. They will silently never
-run.** Two independent reasons:
-
-1. Spellguard's managed `~/.profile` contains a tmux auto-attach block that
-   **`exec`s into tmux partway through the file**. Every line below that block
-   is dead for an interactive login — the `exec` replaces the shell before the
-   file finishes.
-2. tmux panes are **non-login** shells (neither `~/.tmux.conf` nor
-   `~/.tmux.conf.local` sets a `default-command`), and a non-login shell never
-   reads `~/.profile` at all.
-
-So an `export` appended to the end of `~/.profile` runs in neither case. This
-was a real bug: `CCMATRIX_VM_LETTER` and the `~/.local/bin` and
-`/usr/local/go/bin` PATH entries all sat below the exec, which is why a
-`~/.local/bin` binary could be "command not found" inside tmux while the export
-was plainly visible in `~/.profile`.
-
-box-bootstrap therefore writes shell settings to `~/.bash_personal` (portable)
-or `~/.bash_box_env` (per-box) and **no longer writes to `~/.profile` at all**.
-Lines an earlier version already appended there are deliberately left alone —
-rewriting a user's `~/.profile` is not this repo's business — and
-`--check` reports them as a diagnostic so you know they are inert.
-`~/.bash_personal` re-derives a legacy `CCMATRIX_VM_LETTER` from `~/.profile`,
-so a box provisioned before this change keeps working without intervention.
-
-The `--check` arm that matters is behavioral, not structural — it asserts in the
-exact shell type that failed:
-
-```bash
-env -i HOME="$HOME" TERM=dumb bash -ic 'type dps'   # a non-login interactive bash
-```
 
 ### tailscale (personal, userspace)
 
@@ -179,8 +138,7 @@ port 6419 with the built-in `nightshade` theme).
    `codex-matrix enable`.
 2. Writes `~/.ccmatrix/config.json` at mode **0600** from the `CCMATRIX_*` env
    vars — only if it does not already exist.
-3. Appends `export CCMATRIX_VM_LETTER=…` to `~/.bash_box_env` (once) — **not**
-   `~/.profile`; see [Why not `~/.profile`?](#why-not-profile-read-this-before-adding-an-export).
+3. Appends `export CCMATRIX_VM_LETTER=…` to `~/.profile` (once).
 4. Installs [`examples/tmux.conf.local.example`](examples/tmux.conf.local.example)
    to `~/.tmux.conf.local` **only if absent**.
 
@@ -271,7 +229,143 @@ Two things are intentionally not portable:
    the Nerd Font selected in the iTerm2 profile on the Mac. Installing a font
    on the remote VM does not change iTerm2's rendering.
 
-## Nick-side prerequisites (personal tailnet admin console)
+### agent-config (Claude Code)
+
+1. Installs a templated `~/.claude/settings.json` from
+   [`dotfiles/claude/settings.template.json`](dotfiles/claude/settings.template.json):
+   the model pin, `effortLevel`, and the inline `PreToolUse` hook that denies any
+   Bash command carrying the Claude attribution footer.
+2. The `Stop` / `Notification` hooks point at `~/.local/bin/notify-claude.sh` and
+   `~/.local/bin/notify-claude-attention.sh`. They are **only written when
+   `--notifications` is also selected or those scripts already exist**, so the
+   settings file never references a script that is not there.
+3. Installs `superpowers`, `context7`, `typescript-lsp`, and `pyright-lsp` from
+   `claude-plugins-official` **through `claude plugin install`**. A hand-copied
+   plugin directory never auto-updates, so the official CLI is the only
+   supported path.
+
+> **Never clobbered.** An existing `settings.json` is deep-merged with `jq`: the
+> keys above win, and everything else the file holds — `enabledPlugins`,
+> `extraKnownMarketplaces`, provider-written keys — survives. A timestamped
+> `settings.json.pre-box-bootstrap-<ts>` backup is taken before any change.
+> Without `jq` the file is replaced wholesale, after the same backup.
+
+> **`spellguard@spellguard` is never installed here.** The box provider's
+> managed provisioning owns that plugin. `--check` reports whether it is
+> present, and its absence is never a box-bootstrap failure. `slack` and
+> `frontend-design` are deliberately left out too.
+
+### codex-config
+
+1. Installs the three custom agents (`luna-max`, `terra-xhigh`,
+   `sol-high`) into `~/.codex/agents/`.
+2. Merges [`dotfiles/codex/config.portable.toml`](dotfiles/codex/config.portable.toml)
+   into `~/.codex/config.toml` **additively** via
+   [`scripts/merge-codex-config.sh`](scripts/merge-codex-config.sh).
+3. Adds the superpowers marketplace and installs `superpowers@superpowers-dev`
+   and `github@openai-curated` with `codex plugin marketplace add` /
+   `codex plugin add`.
+
+> **The merge only ever adds.** A key that already exists — at the top level or
+> inside `[agents]` — keeps its value and its comments. Tables the baseline does
+> not name are never read or rewritten, which is what keeps the sections a
+> managed provider owns safe: `shell_environment_policy`, `hooks.state`,
+> `projects`, and `marketplaces`. The file is written through its existing inode
+> so it keeps its mode (`0600`), and a timestamped backup is taken first.
+>
+> `./scripts/merge-codex-config.sh --check --baseline … --target …` prints the
+> missing keys and changes nothing.
+
+> The Codex `spellguard` plugin is never installed here either — same reason as
+> on the Claude side.
+
+### shell
+
+Splices [`dotfiles/shell/bashrc-block.sh`](dotfiles/shell/bashrc-block.sh) into
+`~/.bashrc` between
+
+```text
+# >>> box-bootstrap shell block >>>
+# <<< box-bootstrap shell block <<<
+```
+
+Re-running compares the region and only rewrites it when the vendored block has
+changed (backing `~/.bashrc` up first). Content outside the markers is never
+touched. The block carries: `~/.local/bin` on PATH, the `claude`/`codex`
+skip-permission aliases, the general/notification/pnpm/npm/git/docker
+alias suite, the Node heap ceiling, nvm auto-use on `cd`, the pnpm global bin
+PATH, and the Go PATH.
+
+> **Two things are deliberately excluded.** The tmux auto-attach block — a
+> managed box appends its own, and a second one double-attaches on every
+> login — and the go-grip preview line, which the `--gogrip` component's systemd
+> user unit owns. `--check` fails if it finds more than one tmux auto-attach in
+> `~/.bashrc`.
+
+> **`CLOUDFLARE_API_TOKEN` never lands in `~/.bashrc`.** When the variable is set
+> at install time it is written to `~/.config/box-bootstrap/shell.env` at mode
+> **0600**, which the block sources. Rotating it is an edit of that file, not a
+> reinstall.
+
+### dark-factory
+
+1. `just` from apt.
+2. `agent-browser` via `npm install -g`, then its Chromium build
+   (`agent-browser install --with-deps`, falling back to plain `install`).
+   Needs Node — the component warns and skips this step when `node` is missing.
+3. Clones [dark-factory](https://github.com/nickfujita/dark-factory) to
+   `~/dark-factory` anonymously over HTTPS (it is a public repo), or
+   `git pull --ff-only`s an existing checkout.
+4. Runs the checkout's `scripts/sync-to-global.sh` to populate
+   `~/.claude/skills` and `~/.codex/skills`.
+
+### notifications
+
+Installs four scripts into `~/.local/bin` (**no sudo**, unlike the reference
+VM's `/usr/local/bin`): `notify-moshi.sh`, `notify-claude.sh`,
+`notify-claude-attention.sh`, and `notify-codex.sh`. The Claude wrappers log
+every event to `~/.notify-claude.log`, the attention wrapper rate-limits itself
+to one push per 60 s, and all of them honour the `~/.notifications-off` toggle
+(`notify-on` / `notify-off` / `notify-status` come from the `--shell` block).
+
+> **The webhook credential lives outside the scripts.** `MOSHI_WEBHOOK_URL` and
+> `MOSHI_WEBHOOK_TOKEN` are written to `~/.config/moshi/webhook.env` at mode
+> **0600**, which `notify-moshi.sh` sources **at runtime** — so rotating the
+> token is an edit of that file, never a reinstall. An existing `webhook.env` is
+> left untouched. With no webhook configured the scripts exit silently rather
+> than failing inside an agent hook.
+
+> **Codex `notify` is left alone.** `notify-codex.sh` is installed, but
+> `~/.codex/config.toml`'s `notify` key is not touched: on a bridge-equipped box
+> the Matrix bridge owns that key and fans out to this script itself. Pointing
+> `notify` straight here would replace the bridge handler and silently break
+> phone routing.
+
+### global-instructions
+
+Renders two vendored templates:
+
+- [`dotfiles/claude/CLAUDE.md.template`](dotfiles/claude/CLAUDE.md.template) →
+  `~/.claude/CLAUDE.md`: the Claude-Code-specific harness notes plus the
+  `@~/.codex/AGENTS.md` import.
+- [`dotfiles/codex/AGENTS.md.template`](dotfiles/codex/AGENTS.md.template) →
+  `~/.codex/AGENTS.md`: the **portable core only** — Git Workflow, File Links,
+  Python, Testing, Live Agent CLI Tests and Phone Bridge, Mobile and TTS Final
+  Messages, Safety, and the multi-agent workflow block from
+  [`dotfiles/codex/instructions/shared.md`](dotfiles/codex/instructions/shared.md)
+  (its sync markers are preserved so the reconciliation skill can still find the
+  managed region).
+
+`{{GOGRIP_BASE_URL}}` in the File Links section is rendered from
+`$GOGRIP_BASE_URL`, or assembled as
+`http://$BOX_NAME.$PERSONAL_TAILNET:6419` when that is not set.
+
+> Machine-specific context — home infrastructure, per-project dogfooding
+> runbooks, credential locations — is deliberately **not** in the template. Keep
+> it in a file under `~/.codex/references/` instead. Neither file is ever
+> overwritten without a timestamped `.pre-box-bootstrap-<ts>` backup.
+
+## Operator-side prerequisites (personal tailnet admin console)
 
 These are one-time setup steps in the **personal** tailnet before a box can join.
 
@@ -328,22 +422,42 @@ selected component as satisfied or not and changes nothing (exit non-zero if any
 selected component is incomplete). Re-running `./install.sh` is a no-op when
 everything is already in place: binaries/units are only (re)written when missing
 or changed, core service config files are never clobbered, and `tailscale up` /
-service enables are skipped when already active. The two captured dotfile sets
-are the deliberate exceptions: the Neovim config (once marked as managed) and
-`~/.bash_personal` both converge back to the checked-in copy so all VMs stay
-consistent — make lasting changes in `dotfiles/`, not on the box.
+service enables are skipped when already active.
+
+Note that `./install.sh --check` with no component named probes the **core
+four**; add `--agents` (or the individual flags) to probe the agent-environment
+components too.
+
+Files the agent-environment components own — the vendored Codex agents and
+skill, the `~/.bashrc` block, the notify scripts, `CLAUDE.md`, and `AGENTS.md` —
+deliberately **converge** to the repository copy so every box stays consistent,
+and a differing pre-existing file is always preserved as
+`<name>.pre-box-bootstrap-<timestamp>` first. Files another system owns are
+never converged: `~/.codex/config.toml` is only ever added to,
+`~/.claude/settings.json` is deep-merged, and `~/.config/moshi/webhook.env` and
+`~/.config/box-bootstrap/shell.env` are written once and then left alone so a
+rotated credential survives a re-run. The Neovim config follows the same
+converge rule as the vendored agent files.
 
 ## Repo layout
 
 ```
 install.sh                              # the idempotent installer
-dotfiles/bash/bash_personal             # tracked personal shell config (no secrets)
 dotfiles/nvim/                          # captured LazyVim configuration + lock
+dotfiles/claude/settings.template.json  # ~/.claude/settings.json template
+dotfiles/claude/CLAUDE.md.template      # ~/.claude/CLAUDE.md template
+dotfiles/codex/AGENTS.md.template       # ~/.codex/AGENTS.md template (portable core)
+dotfiles/codex/config.portable.toml     # additively merged into ~/.codex/config.toml
+dotfiles/codex/agents/*.toml            # custom Codex agents
+dotfiles/codex/instructions/shared.md   # multi-agent workflow block (sync markers)
+dotfiles/shell/bashrc-block.sh          # the marker-guarded ~/.bashrc block
 scripts/install-neovim.sh               # standalone full editor installer
 scripts/bootstrap-nvim.lua              # headless Mason/Tree-sitter installer
 scripts/capture-neovim.sh               # refresh the captured config
+scripts/merge-codex-config.sh           # additive-only TOML merge (+ --check)
+scripts/notify/notify-*.sh              # push hooks installed to ~/.local/bin
 units/tailscaled-personal.service       # personal tailscaled (system unit)
 units/gogrip.service                    # go-grip preview (user unit)
-examples/ccmatrix-config.env.example    # runtime env template (no real secrets)
+examples/bootstrap.env.example          # runtime env template (no real secrets)
 examples/tmux.conf.local.example        # personal tmux overrides
 ```

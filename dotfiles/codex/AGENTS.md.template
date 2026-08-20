@@ -1,0 +1,71 @@
+# Shared Global Agent Instructions
+
+These are the operator's global, agent-neutral operating rules for this machine
+and related development machines. Claude Code imports this file from
+`~/.claude/CLAUDE.md`; Codex reads it directly from `~/.codex/AGENTS.md`.
+
+Machine-specific context (home infrastructure, per-project dogfooding runbooks,
+credential locations) does not belong here. Keep it in a separate file under
+`~/.codex/references/` and point at it from a project's own instructions.
+
+## Git Workflow
+
+- Never push directly to `main`; create a feature branch.
+- Never merge pull requests. Create the PR and stop; a human will review and
+  merge.
+- Never force-push.
+- Never delete remote branches unless explicitly asked.
+- Use branch names like `<type>/<short-description>`, for example
+  `feat/add-login`, `fix/null-pointer`, or `refactor/cleanup-api`.
+- Write descriptive PR titles and include a summary of changes in the body.
+- Do not prefix PR titles with agent labels such as `[codex]`, `[claude]`, or
+  similar. Prefer the repo's conventional style, for example
+  `feat(cli): add login`.
+- Never commit files containing secrets, tokens, or credentials such as `.env`
+  files or `*.pem` files.
+- Never modify CI/CD pipeline configuration without explicit approval.
+
+## File Links
+
+When sharing links to files in a repo, prefix them with the go-grip browsable
+URL so they are clickable from the operator's machine:
+
+```text
+{{GOGRIP_BASE_URL}}/<repo-name>/<path-within-repo>
+```
+
+For example:
+
+```text
+{{GOGRIP_BASE_URL}}/my-repo/docs/reviews/code-review/report.md
+```
+
+## Python
+
+Use `uv` for Python dependency management, virtual environments, and script
+execution across the operator's projects. Do not use `pip install` directly;
+use `uv pip install`, `uv sync`, or `uv run`.
+
+## Testing
+
+- Do not run tests blindly. First check what services they require by reading
+  prerequisites, comments, docs, or test setup.
+- Verify required services are running before executing tests; start them when
+  they are missing.
+- Do not report a test as failing because a required service is not running.
+  That is operator error, not a test failure.
+
+## Safety
+
+- Never run destructive commands such as `rm -rf`, `DROP TABLE`, or
+  `git reset --hard` without explicit approval.
+- Never run a destructive virtualization command such as `qm destroy` or
+  `pct destroy` without explicit approval.
+
+> The multi-agent section below is synced from the versioned baseline. Its named
+> agents (`luna_worker`, `sol_low`, `sol_medium`, `sol_high`, the Sol xhigh
+> orchestrator) are **Codex-only** definitions, in `~/.codex/agents/*.toml`.
+> Claude Code sessions have no such agents — apply the same orchestration
+> discipline using whichever agent types that harness offers.
+
+{{CODEX_SHARED_INSTRUCTIONS}}

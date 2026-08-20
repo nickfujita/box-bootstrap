@@ -374,8 +374,8 @@ install_go_toolchain() {
   rm -rf "$tmp"
   # ~/.bashrc, NOT ~/.profile: a Spellguard-managed ~/.profile execs into tmux
   # partway through (so later lines never run), and tmux panes are non-login
-  # shells that skip ~/.profile entirely. box-bootstrap's --shell component also
-  # puts this directory on PATH via ~/.bash_personal.
+  # shells that skip ~/.profile entirely. The --shell component's block lands in
+  # ~/.bashrc for the same reason.
   # Intentionally preserve the variables for expansion by future shells.
   # shellcheck disable=SC2016
   append_once "${HOME}/.bashrc" 'export PATH="$PATH:/usr/local/go/bin"'

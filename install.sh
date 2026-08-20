@@ -9,15 +9,16 @@
 # is already in place, so re-running this script is safe.
 #
 # Usage:
-#   ./install.sh                      # install all five core components
-#   ./install.sh --check              # probe all five core components
+#   ./install.sh                      # install all four core components
+#   ./install.sh --check              # probe all four core components
 #   ./install.sh --gogrip             # only the selected core component(s)
 #   ./install.sh --neovim             # only the complete editor stack
-#   ./install.sh --all                # core five + every --with-* extra
-#   ./install.sh --with-go --with-uv   # core five PLUS optional extras
+#   ./install.sh --agents             # the six agent-environment components
+#   ./install.sh --all                # core four + agents six + every extra
+#   ./install.sh --with-go --with-uv   # core four PLUS optional extras
 #   ./install.sh --matrix --check     # probe just one component
 #
-# Secrets are read from the environment (see examples/ccmatrix-config.env.example);
+# Secrets are read from the environment (see examples/bootstrap.env.example);
 # nothing sensitive is ever written into this repo.
 
 set -euo pipefail
@@ -26,11 +27,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNITS_DIR="${SCRIPT_DIR}/units"
 EXAMPLES_DIR="${SCRIPT_DIR}/examples"
 DOTFILES_DIR="${SCRIPT_DIR}/dotfiles"
+NOTIFY_SRC_DIR="${SCRIPT_DIR}/scripts/notify"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 GOGRIP_RELEASE_URL="https://github.com/nickfujita/go-grip/releases/latest/download/go-grip-linux-amd64"
 GOGRIP_BIN="${HOME}/.local/bin/go-grip"
 GOGRIP_UNIT="${HOME}/.config/systemd/user/gogrip.service"
+GOGRIP_PORT=6419
 
 TS_PERSONAL_UNIT="/etc/systemd/system/tailscaled-personal.service"
 TS_PERSONAL_SOCK="/run/tailscale-personal/tailscaled.sock"
@@ -40,25 +43,89 @@ CCMATRIX_DIR="${HOME}/.ccmatrix"
 CCMATRIX_CONFIG="${CCMATRIX_DIR}/config.json"
 TMUX_LOCAL="${HOME}/.tmux.conf.local"
 
-BASH_PERSONAL_SOURCE="${DOTFILES_DIR}/bash/bash_personal"
-BASH_PERSONAL="${HOME}/.bash_personal"
-BASH_ALIASES="${HOME}/.bash_aliases"
-BASH_SECRETS="${HOME}/.bash_secrets"
-# Per-box generated values (never tracked in this repo); sourced by bash_personal.
-BASH_BOX_ENV="${HOME}/.bash_box_env"
-# Intentionally single-quoted: the literal line, expanded when the shell reads it.
-# shellcheck disable=SC2016
-BASH_PERSONAL_HOOK='[ -f "$HOME/.bash_personal" ] && . "$HOME/.bash_personal"'
-
-# Spellguard's managed ~/.profile `exec`s into tmux inside this block, so every
-# line BELOW the marker is dead for an interactive login — and tmux panes are
-# non-login shells that never read ~/.profile at all. box-bootstrap therefore
-# writes shell settings to ~/.bash_personal / ~/.bash_box_env, never ~/.profile.
-TMUX_EXEC_MARKER='# >>> spellguard tmux auto-attach >>>'
-
 # The public repo that ships the Claude Code Matrix bridge plugin. Override via
 # the PLUGINS_REPO_URL env var to install from a fork or a local marketplace.
 PLUGINS_REPO_URL="${PLUGINS_REPO_URL:-nickfujita/matrix-bridge-plugin}"
+
+# ── Claude Code (component: agent-config, global-instructions) ───────────────
+CLAUDE_DIR="${HOME}/.claude"
+CLAUDE_SETTINGS="${CLAUDE_DIR}/settings.json"
+CLAUDE_MD="${CLAUDE_DIR}/CLAUDE.md"
+CLAUDE_PLUGIN_STATE="${CLAUDE_DIR}/plugins/installed_plugins.json"
+# Anthropic's first-party marketplace; auto-update only works for plugins the
+# official CLI installed, so every plugin below goes through `claude plugin`.
+CLAUDE_MARKETPLACE="${CLAUDE_MARKETPLACE:-anthropics/claude-plugins-official}"
+CLAUDE_MARKETPLACE_NAME="claude-plugins-official"
+CLAUDE_PLUGINS="superpowers context7 typescript-lsp pyright-lsp"
+# Never installed here — the box provider's managed provisioning owns it. The
+# --check probe reports on it; nothing in this script ever installs it.
+CLAUDE_PROVIDER_PLUGIN="spellguard@spellguard"
+
+# ── Codex (component: codex-config, global-instructions) ─────────────────────
+CODEX_DIR="${HOME}/.codex"
+CODEX_CONFIG="${CODEX_DIR}/config.toml"
+
+# The `[agents]` SETTINGS keys (enabled / max_concurrent_threads_per_session /
+# max_depth / default_subagent_*) only exist from codex 0.145.0, where
+# multi_agent_v2 stabilised. On an older CLI `[agents]` is a map of agent ROLES,
+# so those scalars make config.toml fail to parse and EVERY codex command dies
+# with "invalid type: boolean `true`, expected struct AgentRoleToml". A managed
+# box can ship an older pinned codex than a dev VM, so gate the baseline on the
+# installed version rather than assuming. (Hit live on a managed box running
+# codex 0.140.0, 2026-08-03.)
+CODEX_AGENTS_SETTINGS_MIN="0.145.0"
+codex_supports_agents_settings() {
+  have_cmd codex || return 1
+  local v
+  v="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  [ -n "$v" ] || return 1
+  [ "$(printf '%s\n%s\n' "$CODEX_AGENTS_SETTINGS_MIN" "$v" | sort -V | head -1)" = "$CODEX_AGENTS_SETTINGS_MIN" ]
+}
+
+# Emit the baseline to use for the merge: the vendored file, minus the [agents]
+# table when the installed codex is too old to understand it.
+codex_baseline_file() {
+  local src="${DOTFILES_DIR}/codex/config.portable.toml"
+  if codex_supports_agents_settings; then
+    printf '%s' "$src"
+    return
+  fi
+  local trimmed="${TMPDIR:-/tmp}/box-bootstrap-codex-baseline.$$.toml"
+  awk '
+    /^\[agents\]$/ { skip = 1; next }
+    /^\[/          { skip = 0 }
+    !skip          { print }
+  ' "$src" > "$trimmed"
+  printf '%s' "$trimmed"
+}
+CODEX_AGENTS_DIR="${CODEX_DIR}/agents"
+CODEX_SKILLS_DIR="${CODEX_DIR}/skills"
+CODEX_AGENTS_MD="${CODEX_DIR}/AGENTS.md"
+CODEX_AGENT_FILES="luna-max.toml terra-xhigh.toml sol-high.toml"
+SUPERPOWERS_MARKETPLACE_URL="${SUPERPOWERS_MARKETPLACE_URL:-https://github.com/obra/superpowers.git}"
+# The name comes from the marketplace's own manifest, not from the URL.
+SUPERPOWERS_MARKETPLACE_NAME="superpowers-dev"
+CODEX_PROVIDER_PLUGIN="spellguard@spellguard"
+
+# ── Shell (component: shell) ─────────────────────────────────────────────────
+BASHRC="${HOME}/.bashrc"
+SHELL_MARKER_START='# >>> box-bootstrap shell block >>>'
+SHELL_MARKER_END='# <<< box-bootstrap shell block <<<'
+BOX_CONF_DIR="${HOME}/.config/box-bootstrap"
+BOX_SHELL_ENV="${BOX_CONF_DIR}/shell.env"
+# 12 GB fits a 16 GB dev box; the 4 GB Node default aborts long agent runs.
+NODE_MAX_OLD_SPACE_MB="${NODE_MAX_OLD_SPACE_MB:-8192}"
+
+# ── Notifications (component: notifications) ─────────────────────────────────
+LOCAL_BIN="${HOME}/.local/bin"
+NOTIFY_SCRIPTS="notify-moshi.sh notify-claude.sh notify-claude-attention.sh notify-codex.sh"
+MOSHI_CONF_DIR="${HOME}/.config/moshi"
+MOSHI_CONF="${MOSHI_CONF_DIR}/webhook.env"
+
+# ── dark-factory (component: dark-factory) ───────────────────────────────────
+DARK_FACTORY_REPO_URL="${DARK_FACTORY_REPO_URL:-https://github.com/nickfujita/dark-factory.git}"
+DARK_FACTORY_DIR="${HOME}/dark-factory"
+DARK_FACTORY_STAMP="${HOME}/.cache/box-bootstrap/agent-browser-installed"
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
@@ -77,167 +144,52 @@ require_env() {
   fi
 }
 
-# append_once FILE LINE — append LINE to FILE unless it is already there.
-# Kept byte-identical to scripts/install-neovim.sh's copy; that script stays
-# standalone, so the definition is deliberately duplicated rather than shared.
-append_once() {
-  local file="$1" line="$2"
-  touch "$file"
-  if ! grep -qF -- "$line" "$file" 2>/dev/null; then
-    # Some installers leave profile files without a trailing newline. Do not
-    # concatenate our setting onto their final command.
-    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then
-      printf '\n' >> "$file"
-    fi
-    printf '%s\n' "$line" >> "$file"
+# append_profile_once LINE — append LINE to ~/.profile unless it is already there.
+append_profile_once() {
+  local line="$1"
+  grep -qF -- "$line" "${HOME}/.profile" 2>/dev/null || printf '%s\n' "$line" >> "${HOME}/.profile"
+}
+
+# backup_file PATH — copy PATH aside with a timestamp, echo the backup path.
+# Nothing this script manages is ever replaced without one of these first.
+backup_file() {
+  local f="$1" bak
+  bak="${f}.pre-box-bootstrap-$(date +%Y%m%d%H%M%S)"
+  cp -a "$f" "$bak"
+  printf '%s' "$bak"
+}
+
+# install_managed_file SRC DST [MODE] — converge DST to SRC. A pre-existing
+# different DST is backed up first; an identical DST is a no-op.
+install_managed_file() {
+  local src="$1" dst="$2" mode="${3:-0644}" bak
+  mkdir -p "$(dirname "$dst")"
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    ok "${dst} already up to date"
+    return 0
   fi
+  if [ -e "$dst" ]; then
+    bak="$(backup_file "$dst")"
+    warn "backed up existing ${dst} to ${bak}"
+  fi
+  install -m "$mode" "$src" "$dst"
+  ok "installed ${dst}"
+}
+
+# have_cmd NAME — quiet command probe.
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# claude_cli / codex_cli — resolve the agent CLIs, which live in ~/.local/bin or
+# an nvm-managed prefix that a non-login shell may not have on PATH yet.
+agent_cli_path() {
+  local name="$1"
+  if have_cmd "$name"; then command -v "$name"; return 0; fi
+  if [ -x "${LOCAL_BIN}/${name}" ]; then printf '%s' "${LOCAL_BIN}/${name}"; return 0; fi
+  return 1
 }
 
 # Talk to the PERSONAL tailscaled over its private socket (needs root).
 ts_personal() { $SUDO tailscale --socket="$TS_PERSONAL_SOCK" "$@"; }
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Component: personal shell config (~/.bash_personal)
-# ═════════════════════════════════════════════════════════════════════════════
-
-# Warn about box-bootstrap exports stranded below ~/.profile's tmux `exec`.
-# Purely diagnostic — it never edits ~/.profile — and only fires on boxes
-# provisioned before shell settings moved out of ~/.profile.
-check_profile_dead_exports() {
-  local profile="${HOME}/.profile" marker_line dead line
-  if [ ! -f "$profile" ]; then
-    ok "no ~/.profile; nothing can be stranded below a tmux exec"
-    return 0
-  fi
-  marker_line="$(grep -nF -- "$TMUX_EXEC_MARKER" "$profile" 2>/dev/null | head -n1 | cut -d: -f1)" || true
-  if [ -z "$marker_line" ]; then
-    ok "~/.profile has no tmux auto-attach block"
-    return 0
-  fi
-  dead="$(tail -n +"$marker_line" "$profile" \
-    | grep -E '^[[:space:]]*export[[:space:]]+(CCMATRIX_VM_LETTER|PATH)=' || true)"
-  if [ -n "$dead" ]; then
-    warn "~/.profile exports below '${TMUX_EXEC_MARKER}' are DEAD (the block execs into tmux, and tmux panes skip ~/.profile entirely):"
-    while IFS= read -r line; do
-      [ -n "$line" ] && warn "    ${line}"
-    done <<< "$dead"
-    warn "    move them to ~/.bash_box_env (per-box) or dotfiles/bash/bash_personal (portable), then re-run './install.sh --shell --matrix'"
-    return 1
-  fi
-  ok "no box-bootstrap exports stranded below the ~/.profile tmux exec"
-  return 0
-}
-
-# The tracked dotfile is committed to a git repository, so a credential in it
-# would be published. Fail loudly rather than ship one.
-check_bash_personal_no_secrets() {
-  local hits
-  hits="$(grep -nE '^[^#]*(TOKEN|SECRET|API_KEY|PASSWORD)[[:space:]]*=' "$BASH_PERSONAL_SOURCE" 2>/dev/null || true)"
-  if [ -n "$hits" ]; then
-    warn "dotfiles/bash/bash_personal assigns something credential-shaped — it is tracked in git and must never hold a secret:"
-    printf '%s\n' "$hits" >&2
-    warn "    move it to ~/.bash_secrets (mode 0600, untracked)"
-    return 1
-  fi
-  ok "tracked bash_personal holds no credential-shaped assignment"
-  return 0
-}
-
-check_shell() {
-  local status=0
-  if [ -f "${HOME}/.bashrc" ]; then
-    ok "~/.bashrc present"
-  else
-    warn "~/.bashrc missing"; status=1
-  fi
-
-  if grep -q '\.bash_aliases' "${HOME}/.bashrc" 2>/dev/null; then
-    ok "~/.bashrc sources ~/.bash_aliases"
-  else
-    warn "~/.bashrc does not source ~/.bash_aliases"; status=1
-  fi
-
-  if [ ! -f "$BASH_PERSONAL" ]; then
-    warn "~/.bash_personal missing"; status=1
-  elif cmp -s "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"; then
-    ok "~/.bash_personal matches dotfiles/bash/bash_personal"
-  else
-    warn "~/.bash_personal differs from dotfiles/bash/bash_personal (drift; re-run --shell)"; status=1
-  fi
-
-  if grep -qF -- "$BASH_PERSONAL_HOOK" "$BASH_ALIASES" 2>/dev/null; then
-    ok "~/.bash_aliases sources ~/.bash_personal"
-  else
-    warn "~/.bash_aliases is missing the ~/.bash_personal hook line"; status=1
-  fi
-
-  # Behavioral: assert in the shell type that actually failed — a NON-LOGIN
-  # interactive bash, which is what a tmux pane runs and what never reads
-  # ~/.profile. A green structural check with a red arm here is the exact
-  # failure this component exists to prevent.
-  if env -i HOME="$HOME" TERM=dumb bash -ic 'type dps' >/dev/null 2>&1; then
-    ok "a non-login interactive shell sees the personal config (type dps)"
-  else
-    warn "a non-login interactive shell does NOT see 'dps' — ~/.bash_personal is not reaching tmux panes"; status=1
-  fi
-
-  # Diagnostic only — deliberately does NOT set status. box-bootstrap refuses to
-  # rewrite a pre-existing ~/.profile, so a legacy box could never make this arm
-  # green, and a permanently-red --check trains people to ignore it. Once the
-  # arms above pass, those stranded lines are dead cruft rather than a live
-  # defect: ~/.bash_personal supersedes every one of them. A box that genuinely
-  # is not getting its settings fails the four structural arms and the
-  # behavioral arm anyway.
-  check_profile_dead_exports || true
-  check_bash_personal_no_secrets || status=1
-  return $status
-}
-
-install_shell() {
-  log "Component: personal shell config (~/.bash_personal)"
-
-  [ -f "$BASH_PERSONAL_SOURCE" ] || die "tracked shell config missing: ${BASH_PERSONAL_SOURCE}"
-
-  # 1. Seed ~/.bashrc from the distro skeleton ONLY when it is absent. An
-  #    existing ~/.bashrc is the user's (or Spellguard's); never clobber it.
-  if [ -f "${HOME}/.bashrc" ]; then
-    ok "~/.bashrc already present; left untouched"
-  elif [ -f /etc/skel/.bashrc ]; then
-    install -m 0644 /etc/skel/.bashrc "${HOME}/.bashrc"
-    ok "seeded ~/.bashrc from /etc/skel/.bashrc"
-  else
-    warn "~/.bashrc is missing and /etc/skel/.bashrc does not exist; create one or ~/.bash_personal will never be sourced"
-  fi
-
-  # 2. Install the tracked personal config. Whole-file replace (the repo copy is
-  #    the source of truth, as with dotfiles/nvim), no-op when already identical.
-  if cmp -s "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"; then
-    ok "~/.bash_personal already matches the repository copy"
-  else
-    install -m 0644 "$BASH_PERSONAL_SOURCE" "$BASH_PERSONAL"
-    ok "installed ~/.bash_personal (mode 0644) from dotfiles/bash/bash_personal"
-  fi
-
-  # 3. Hook it in through ~/.bash_aliases, which the stock Ubuntu ~/.bashrc
-  #    sources for every interactive shell — login and non-login alike.
-  #    append_once, so the neovim component's "alias n='nvim'" line survives.
-  append_once "$BASH_ALIASES" "$BASH_PERSONAL_HOOK"
-  ok "~/.bash_aliases sources ~/.bash_personal"
-
-  # 4. Create the secrets file at 0600 if absent. box-bootstrap NEVER writes
-  #    into it — it exists so there is an obvious place for tokens that is not
-  #    this repository.
-  if [ -f "$BASH_SECRETS" ]; then
-    chmod 600 "$BASH_SECRETS"
-    ok "~/.bash_secrets present; left untouched (mode 0600 enforced)"
-  else
-    install -m 600 /dev/null "$BASH_SECRETS"
-    ok "created empty ~/.bash_secrets (mode 0600) — put tokens there, never in the repo"
-  fi
-
-  # 5. Report, but do not fix, settings stranded in a pre-existing ~/.profile.
-  check_profile_dead_exports || true
-}
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Component: personal tailscaled (userspace networking)
@@ -387,12 +339,11 @@ check_matrix() {
   else
     warn "ccmatrix config missing"; status=1
   fi
-  if grep -q '^export CCMATRIX_VM_LETTER=' "$BASH_BOX_ENV" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER exported in ~/.bash_box_env"
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BOX_SHELL_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER exported in ${BOX_SHELL_ENV}"
   elif grep -q '^export CCMATRIX_VM_LETTER=' "${HOME}/.profile" 2>/dev/null; then
-    warn "CCMATRIX_VM_LETTER lives only in ~/.profile (legacy: dead below the tmux exec; ~/.bash_personal re-derives it). Re-run '--matrix' with CCMATRIX_VM_LETTER set to migrate it."; status=1
-  else
-    warn "CCMATRIX_VM_LETTER not exported in ~/.bash_box_env"; status=1
+    # Legacy location. It is almost certainly DEAD: see install_matrix step 4.
+    warn "CCMATRIX_VM_LETTER is in ~/.profile (legacy, and dead below the tmux exec) — re-run './install.sh --matrix' to move it to ${BOX_SHELL_ENV}"; status=1
   fi
   if [ -f "$TMUX_LOCAL" ]; then ok "${TMUX_LOCAL} present"; else warn "${TMUX_LOCAL} missing"; status=1; fi
   if command -v codex-matrix >/dev/null 2>&1; then ok "codex-matrix CLI available"; else warn "codex-matrix CLI not found"; status=1; fi
@@ -463,22 +414,27 @@ install_matrix() {
     ok "wrote ${CCMATRIX_CONFIG} (mode 0600, proxy ${proxy})"
   fi
 
-  # 4. Export CCMATRIX_VM_LETTER into ~/.bash_box_env (append once).
-  #    NOT ~/.profile: Spellguard's managed ~/.profile execs into tmux partway
-  #    through, so anything appended after that block never runs, and tmux panes
-  #    are non-login shells that skip ~/.profile entirely. ~/.bash_box_env is
-  #    sourced by ~/.bash_personal, which every interactive shell reads.
-  if grep -q '^export CCMATRIX_VM_LETTER=' "$BASH_BOX_ENV" 2>/dev/null; then
-    ok "CCMATRIX_VM_LETTER already exported in ~/.bash_box_env"
+  # 4. Export CCMATRIX_VM_LETTER into the per-box shell env (append once).
+  #
+  # NOT ~/.profile. Spellguard's managed ~/.profile `exec`s into tmux partway
+  # through, so anything appended after that block never runs for an interactive
+  # login — and tmux panes are non-login shells that skip ~/.profile entirely.
+  # Verified live on a managed box (2026-08-19): the letter was plainly present
+  # in ~/.profile and completely absent from the pane's environment. The --shell
+  # component's ~/.bashrc block already sources BOX_SHELL_ENV, so writing here
+  # reaches both shell types with no new mechanism.
+  install -d -m 700 "$BOX_CONF_DIR"
+  [ -f "$BOX_SHELL_ENV" ] || install -m 600 /dev/null "$BOX_SHELL_ENV"
+  if grep -q '^export CCMATRIX_VM_LETTER=' "$BOX_SHELL_ENV" 2>/dev/null; then
+    ok "CCMATRIX_VM_LETTER already exported in ${BOX_SHELL_ENV}"
   else
     require_env CCMATRIX_VM_LETTER "Single-letter id for this box (e.g. a)."
-    append_once "$BASH_BOX_ENV" '# box-bootstrap: per-box values, sourced from ~/.bash_personal. Not tracked in git.'
-    append_once "$BASH_BOX_ENV" "$(printf 'export CCMATRIX_VM_LETTER=%q' "$CCMATRIX_VM_LETTER")"
-    chmod 0644 "$BASH_BOX_ENV"
-    ok "appended CCMATRIX_VM_LETTER to ~/.bash_box_env"
+    {
+      printf '\n# box-bootstrap: identify this cloud dev box\n'
+      printf 'export CCMATRIX_VM_LETTER=%q\n' "$CCMATRIX_VM_LETTER"
+    } >> "$BOX_SHELL_ENV"
+    ok "appended CCMATRIX_VM_LETTER to ${BOX_SHELL_ENV}"
   fi
-  [ -f "$BASH_PERSONAL" ] \
-    || warn "~/.bash_personal is not installed, so nothing sources ~/.bash_box_env yet; run './install.sh --shell'"
 
   # 5. Install personal tmux overrides — only if absent.
   #    Spellguard REWRITES ~/.tmux.conf on every bootstrap, but never touches
@@ -490,6 +446,637 @@ install_matrix() {
     install -m 0644 "${EXAMPLES_DIR}/tmux.conf.local.example" "$TMUX_LOCAL"
     ok "installed ~/.tmux.conf.local"
   fi
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: Claude Code settings + official plugins  (--agent-config)
+# ═════════════════════════════════════════════════════════════════════════════
+# The Stop/Notification hooks point at the scripts --notifications installs.
+# They are only written when those scripts exist (or are about to).
+claude_hooks_wanted() {
+  [ "${DO_NOTIFICATIONS:-0}" -eq 1 ] || [ -x "${LOCAL_BIN}/notify-claude.sh" ]
+}
+
+# Render the vendored settings template into $1, dropping the notification
+# hooks when the notifier scripts are not part of this box.
+render_claude_settings() {
+  local dst="$1" src="${DOTFILES_DIR}/claude/settings.template.json" tmp
+  sed "s|{{HOME}}|${HOME}|g" "$src" > "$dst"
+  if claude_hooks_wanted; then return 0; fi
+  if have_cmd jq; then
+    tmp="$(mktemp)"
+    jq 'del(.hooks.Stop, .hooks.Notification)' "$dst" > "$tmp" && mv "$tmp" "$dst"
+    ok "notification hooks omitted (--notifications not selected)"
+  else
+    warn "jq not found; leaving the notification hook entries in settings.json (they no-op until --notifications runs)"
+  fi
+}
+
+check_agent_config() {
+  local status=0 p
+  # Claude auto-updates only when its install dir is writable; an npm-global
+  # install on a managed box lands in root-owned /usr and silently cannot.
+  if have_cmd claude; then
+    if [ -w "$(dirname "$(command -v claude)")" ]; then
+      ok "claude auto-update works ($(command -v claude))"
+    else
+      warn "claude cannot auto-update — installed at $(command -v claude) (not writable)"; status=1
+    fi
+  fi
+  if [ -f "$CLAUDE_SETTINGS" ]; then
+    ok "~/.claude/settings.json present"
+    grep -q '"model"'      "$CLAUDE_SETTINGS" || { warn "no model pin in settings.json"; status=1; }
+    grep -q '"effortLevel"' "$CLAUDE_SETTINGS" || { warn "no effortLevel in settings.json"; status=1; }
+    grep -q 'Co-Authored-By' "$CLAUDE_SETTINGS" || { warn "attribution-blocker PreToolUse hook missing"; status=1; }
+    if claude_hooks_wanted; then
+      grep -q 'notify-claude.sh' "$CLAUDE_SETTINGS" || { warn "Stop/Notification hooks not wired to ~/.local/bin"; status=1; }
+    fi
+  else
+    warn "~/.claude/settings.json missing"; status=1
+  fi
+  for p in $CLAUDE_PLUGINS; do
+    if grep -qF "\"${p}@${CLAUDE_MARKETPLACE_NAME}\"" "$CLAUDE_PLUGIN_STATE" 2>/dev/null; then
+      ok "plugin ${p}@${CLAUDE_MARKETPLACE_NAME} installed"
+    else
+      warn "plugin ${p}@${CLAUDE_MARKETPLACE_NAME} not installed"; status=1
+    fi
+  done
+  # Informational only: the provider's managed provisioning owns this one, so
+  # its absence is never a box-bootstrap failure.
+  if grep -qF "\"${CLAUDE_PROVIDER_PLUGIN}\"" "$CLAUDE_PLUGIN_STATE" 2>/dev/null; then
+    ok "provider plugin ${CLAUDE_PROVIDER_PLUGIN} present (managed; not installed by this script)"
+  else
+    warn "provider plugin ${CLAUDE_PROVIDER_PLUGIN} absent (managed provisioning installs it; not a box-bootstrap failure)"
+  fi
+  return $status
+}
+
+install_agent_config() {
+  log "Component: Claude Code settings + official plugins"
+
+  local rendered merged claude p
+  mkdir -p "$CLAUDE_DIR"
+
+  # 0. Self-updating Claude install. A managed box installs the CLI with
+  #    `npm install -g` against a NodeSource Node, whose global prefix is
+  #    root-owned /usr — so Claude lands at /usr/bin/claude and its own
+  #    diagnostics report "Can't auto-update: npm global folder isn't writable".
+  #    `claude install` lays down the native build under ~/.local/share/claude
+  #    with a ~/.local/bin symlink, which IS writable, so auto-update works. The
+  #    npm copy is left alone: ~/.local/bin precedes /usr/bin on PATH (the shell
+  #    block guarantees it), so the native build wins and the old one is a
+  #    harmless fallback. Skipped when Claude already runs from a writable dir.
+  if have_cmd claude; then
+    claude="$(command -v claude)"
+    if [ -w "$(dirname "$claude")" ]; then
+      ok "claude runs from a writable dir (${claude}) — auto-update already works"
+    elif claude install >/dev/null 2>&1 && [ -x "${HOME}/.local/bin/claude" ]; then
+      ok "installed the self-updating native Claude build to ~/.local/bin"
+    else
+      warn "could not install the native Claude build; auto-update stays disabled at ${claude}"
+    fi
+  fi
+
+  # 1. ~/.claude/settings.json — never clobbered without a backup.
+  rendered="$(mktemp)"
+  render_claude_settings "$rendered"
+
+  if [ ! -f "$CLAUDE_SETTINGS" ]; then
+    install -m 0644 "$rendered" "$CLAUDE_SETTINGS"
+    ok "wrote ${CLAUDE_SETTINGS}"
+  elif have_cmd jq; then
+    # Deep-merge: our keys win, everything else the file already holds
+    # (enabledPlugins, extraKnownMarketplaces, provider-written keys) survives.
+    merged="$(mktemp)"
+    jq -s '.[0] * .[1]' "$CLAUDE_SETTINGS" "$rendered" > "$merged"
+    if diff -q <(jq -S . "$CLAUDE_SETTINGS") <(jq -S . "$merged") >/dev/null 2>&1; then
+      ok "settings.json already carries the box-bootstrap keys"
+    else
+      warn "backed up existing settings.json to $(backup_file "$CLAUDE_SETTINGS")"
+      install -m 0644 "$merged" "$CLAUDE_SETTINGS"
+      ok "merged box-bootstrap keys into ${CLAUDE_SETTINGS}"
+    fi
+    rm -f "$merged"
+  elif cmp -s "$rendered" "$CLAUDE_SETTINGS"; then
+    ok "settings.json already up to date"
+  else
+    warn "jq not found — replacing settings.json wholesale (any enabledPlugins state is re-created by the plugin installs below)"
+    warn "backed up existing settings.json to $(backup_file "$CLAUDE_SETTINGS")"
+    install -m 0644 "$rendered" "$CLAUDE_SETTINGS"
+  fi
+  rm -f "$rendered"
+
+  # 2. Plugins, through the official CLI only — a hand-copied plugin never
+  #    auto-updates.
+  if ! claude="$(agent_cli_path claude)"; then
+    warn "claude CLI not found; skipping plugin installs. Re-run --agent-config once it is on PATH."
+    return 0
+  fi
+
+  if "$claude" plugin marketplace list 2>/dev/null | grep -qF -- "$CLAUDE_MARKETPLACE"; then
+    ok "marketplace ${CLAUDE_MARKETPLACE} already added"
+  else
+    log "Adding Claude marketplace: ${CLAUDE_MARKETPLACE}"
+    "$claude" plugin marketplace add "$CLAUDE_MARKETPLACE" \
+      || warn "could not add ${CLAUDE_MARKETPLACE}"
+  fi
+
+  for p in $CLAUDE_PLUGINS; do
+    if grep -qF "\"${p}@${CLAUDE_MARKETPLACE_NAME}\"" "$CLAUDE_PLUGIN_STATE" 2>/dev/null; then
+      ok "plugin ${p} already installed"
+    else
+      log "Installing plugin ${p}@${CLAUDE_MARKETPLACE_NAME}"
+      "$claude" plugin install "${p}@${CLAUDE_MARKETPLACE_NAME}" \
+        || warn "could not install ${p}@${CLAUDE_MARKETPLACE_NAME}"
+    fi
+  done
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: Codex config, custom agents, skills + plugins  (--codex-config)
+# ═════════════════════════════════════════════════════════════════════════════
+codex_config_satisfied() {
+  "${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
+    --baseline "$(codex_baseline_file)" \
+    --target "$CODEX_CONFIG" >/dev/null 2>&1
+}
+
+check_codex_config() {
+  local status=0 f missing
+  for f in $CODEX_AGENT_FILES; do
+    if [ -f "${CODEX_AGENTS_DIR}/${f}" ] && cmp -s "${DOTFILES_DIR}/codex/agents/${f}" "${CODEX_AGENTS_DIR}/${f}"; then
+      ok "agent ${f} in place"
+    else
+      warn "agent ${f} missing or drifted"; status=1
+    fi
+  done
+  if codex_config_satisfied; then
+    ok "portable config keys present in ~/.codex/config.toml"
+  else
+    missing="$("${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
+      --baseline "$(codex_baseline_file)" \
+      --target "$CODEX_CONFIG" 2>/dev/null | tr '\n' ' ' || true)"
+    warn "portable config keys missing from ~/.codex/config.toml: ${missing}"; status=1
+  fi
+  if grep -q "^\[marketplaces\.${SUPERPOWERS_MARKETPLACE_NAME}\]" "$CODEX_CONFIG" 2>/dev/null; then
+    ok "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} configured"
+  else
+    warn "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} not configured"; status=1
+  fi
+  for f in "superpowers@${SUPERPOWERS_MARKETPLACE_NAME}" "github@openai-curated"; do
+    if grep -qF "[plugins.\"${f}\"]" "$CODEX_CONFIG" 2>/dev/null; then
+      ok "codex plugin ${f} installed"
+    else
+      warn "codex plugin ${f} not installed"; status=1
+    fi
+  done
+  # Informational only, exactly as on the Claude side.
+  if grep -qF "[plugins.\"${CODEX_PROVIDER_PLUGIN}\"]" "$CODEX_CONFIG" 2>/dev/null; then
+    ok "provider plugin ${CODEX_PROVIDER_PLUGIN} present (managed; not installed by this script)"
+  else
+    warn "provider plugin ${CODEX_PROVIDER_PLUGIN} absent (managed provisioning installs it; not a box-bootstrap failure)"
+  fi
+  return $status
+}
+
+install_codex_config() {
+  log "Component: Codex config, custom agents, skills + plugins"
+
+  local f tmp codex
+
+  # 1. Custom agents.
+  mkdir -p "$CODEX_AGENTS_DIR"
+  for f in $CODEX_AGENT_FILES; do
+    install_managed_file "${DOTFILES_DIR}/codex/agents/${f}" "${CODEX_AGENTS_DIR}/${f}" 0644
+  done
+
+  # 2. Portable config keys — ADDITIVE ONLY. An existing key keeps its value,
+  #    and the tables the provider writes (shell_environment_policy,
+  #    hooks.state, projects, marketplaces) are never named, so never touched.
+  if codex_config_satisfied; then
+    ok "~/.codex/config.toml already carries every portable key"
+  else
+    tmp="$(mktemp)"
+    "${SCRIPT_DIR}/scripts/merge-codex-config.sh" \
+      --baseline "$(codex_baseline_file)" \
+      --target "$CODEX_CONFIG" > "$tmp"
+    if [ -f "$CODEX_CONFIG" ]; then
+      warn "backed up existing config.toml to $(backup_file "$CODEX_CONFIG")"
+      # Write through the existing inode so the file keeps its mode/owner.
+      cat "$tmp" > "$CODEX_CONFIG"
+    else
+      mkdir -p "$CODEX_DIR"
+      install -m 0600 "$tmp" "$CODEX_CONFIG"
+    fi
+    rm -f "$tmp"
+    ok "merged the portable keys into ${CODEX_CONFIG}"
+  fi
+
+  # 4. Plugins, through the official CLI only.
+  if ! codex="$(agent_cli_path codex)"; then
+    warn "codex CLI not found; skipping plugin installs. Re-run --codex-config once it is on PATH."
+    return 0
+  fi
+
+  if grep -q "^\[marketplaces\.${SUPERPOWERS_MARKETPLACE_NAME}\]" "$CODEX_CONFIG" 2>/dev/null; then
+    ok "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} already added"
+  else
+    log "Adding Codex marketplace: ${SUPERPOWERS_MARKETPLACE_URL}"
+    "$codex" plugin marketplace add "$SUPERPOWERS_MARKETPLACE_URL" --ref main \
+      || warn "could not add ${SUPERPOWERS_MARKETPLACE_URL}"
+  fi
+
+  # `openai-curated` ships with the CLI, so github@openai-curated needs no
+  # marketplace add of its own.
+  for f in "superpowers@${SUPERPOWERS_MARKETPLACE_NAME}" "github@openai-curated"; do
+    if grep -qF "[plugins.\"${f}\"]" "$CODEX_CONFIG" 2>/dev/null; then
+      ok "codex plugin ${f} already installed"
+    else
+      log "Installing codex plugin ${f}"
+      "$codex" plugin add "$f" || warn "could not install ${f}"
+    fi
+  done
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: ~/.bashrc block  (--shell)
+# ═════════════════════════════════════════════════════════════════════════════
+check_shell() {
+  local status=0 perm attaches
+  if grep -qF "$SHELL_MARKER_START" "$BASHRC" 2>/dev/null; then
+    ok "box-bootstrap shell block present in ~/.bashrc"
+  else
+    warn "box-bootstrap shell block missing from ~/.bashrc"; status=1
+  fi
+  # The block ships pnpm ALIASES; without pnpm itself they are dead commands.
+  if have_cmd pnpm; then
+    ok "pnpm available ($(pnpm --version 2>/dev/null || echo 'version unknown'))"
+  else
+    warn "pnpm missing — the shell block's pnpm aliases will not work"; status=1
+  fi
+  # An unmanaged tmux auto-attach is fine; a SECOND one double-attaches, which
+  # is exactly why the vendored block leaves tmux alone.
+  attaches="$(grep -c 'tmux attach-session' "$BASHRC" 2>/dev/null || true)"
+  [ -n "$attaches" ] || attaches=0
+  if [ "$attaches" -gt 1 ]; then
+    warn "~/.bashrc has ${attaches} tmux auto-attach blocks — logins will double-attach"; status=1
+  else
+    ok "at most one tmux auto-attach block in ~/.bashrc"
+  fi
+  if [ -f "$BOX_SHELL_ENV" ]; then
+    perm="$(stat -c '%a' "$BOX_SHELL_ENV" 2>/dev/null || echo '???')"
+    if [ "$perm" = "600" ]; then ok "${BOX_SHELL_ENV} present (mode 600)"
+    else warn "${BOX_SHELL_ENV} mode is ${perm}, expected 600"; status=1; fi
+  else
+    ok "${BOX_SHELL_ENV} absent (optional)"
+  fi
+
+  # Behavioral arm — assert in the shell type that actually breaks. Every check
+  # above is structural, and structural checks are exactly how the ~/.profile
+  # problem below went unnoticed for so long. A tmux pane is a NON-LOGIN
+  # interactive bash: it reads ~/.bashrc and never ~/.profile.
+  if env -i HOME="$HOME" TERM=dumb bash -ic 'type dps' >/dev/null 2>&1; then
+    ok "a non-login interactive shell sees the block (type dps)"
+  else
+    warn "a non-login interactive shell does NOT see the block — tmux panes will be missing the aliases/PATH"; status=1
+  fi
+
+  # Diagnostic only; never edits ~/.profile. Spellguard's managed ~/.profile
+  # execs into tmux, so box-bootstrap settings appended below that marker are
+  # dead for interactive logins and unread by panes. Fires on boxes provisioned
+  # before those settings moved to ~/.bashrc / BOX_SHELL_ENV.
+  local marker='# >>> spellguard tmux auto-attach >>>' marker_line dead
+  if [ -f "${HOME}/.profile" ]; then
+    marker_line="$(grep -nF -- "$marker" "${HOME}/.profile" 2>/dev/null | head -n1 | cut -d: -f1)" || true
+    if [ -n "${marker_line:-}" ]; then
+      dead="$(tail -n +"$marker_line" "${HOME}/.profile" \
+        | grep -E '^[[:space:]]*export[[:space:]]+(CCMATRIX_VM_LETTER|PATH)=' || true)"
+      if [ -n "$dead" ]; then
+        warn "~/.profile has box-bootstrap exports BELOW the tmux exec — they never run. Re-run './install.sh --shell --matrix' to relocate them:"
+        printf '%s\n' "$dead" >&2
+        status=1
+      else
+        ok "no box-bootstrap exports stranded below the ~/.profile tmux exec"
+      fi
+    else
+      ok "~/.profile has no tmux auto-attach block"
+    fi
+  fi
+
+  return $status
+}
+
+install_shell() {
+  log "Component: ~/.bashrc block"
+
+  local src rendered current tmp bak
+  src="${DOTFILES_DIR}/shell/bashrc-block.sh"
+  rendered="$(mktemp)"
+  sed "s|{{NODE_MAX_OLD_SPACE_MB}}|${NODE_MAX_OLD_SPACE_MB}|g" "$src" > "$rendered"
+
+  touch "$BASHRC"
+  if grep -qF "$SHELL_MARKER_START" "$BASHRC"; then
+    current="$(mktemp)"
+    awk -v s="$SHELL_MARKER_START" -v e="$SHELL_MARKER_END" \
+      '$0==s {inb=1; next} $0==e {inb=0; next} inb {print}' "$BASHRC" > "$current"
+    if cmp -s "$current" "$rendered"; then
+      ok "shell block already current"
+    else
+      bak="$(backup_file "$BASHRC")"
+      warn "backed up ~/.bashrc to ${bak}"
+      tmp="$(mktemp)"
+      awk -v s="$SHELL_MARKER_START" -v e="$SHELL_MARKER_END" -v f="$rendered" '
+        $0==s { print; while ((getline l < f) > 0) print l; close(f); inb=1; next }
+        $0==e { print; inb=0; next }
+        inb   { next }
+        { print }' "$BASHRC" > "$tmp"
+      cat "$tmp" > "$BASHRC"
+      rm -f "$tmp"
+      ok "refreshed the box-bootstrap block in ~/.bashrc"
+    fi
+    rm -f "$current"
+  else
+    {
+      printf '\n%s\n' "$SHELL_MARKER_START"
+      cat "$rendered"
+      printf '%s\n' "$SHELL_MARKER_END"
+    } >> "$BASHRC"
+    ok "appended the box-bootstrap block to ~/.bashrc"
+  fi
+  rm -f "$rendered"
+
+  # pnpm. The block above ships the pnpm aliases and PNPM_HOME, but a managed
+  # box has no pnpm at all: its Node comes from NodeSource apt, so the npm
+  # global prefix is /usr (root-owned) and `npm i -g` fails for the box user.
+  # (A dev VM gets pnpm free via nvm + corepack, which is why this gap only
+  # shows up on a managed box — found 2026-08-03 when `pnpm install` failed.)
+  # corepack ships with Node >= 16.9, so enabling its pnpm shim is the smallest
+  # correct step: the shim resolves whatever version a repo pins in its
+  # packageManager field, into the user-owned corepack cache.
+  if have_cmd pnpm; then
+    ok "pnpm already available ($(pnpm --version 2>/dev/null || echo 'version unknown'))"
+  elif have_cmd corepack; then
+    if $SUDO corepack enable pnpm >/dev/null 2>&1 && have_cmd pnpm; then
+      ok "enabled the corepack pnpm shim"
+    else
+      warn "could not enable the corepack pnpm shim; install pnpm manually"
+    fi
+  else
+    warn "neither pnpm nor corepack found; install Node >= 16.9 (or pnpm) and re-run --shell"
+  fi
+
+  # Optional shell secrets, kept out of the world-readable ~/.bashrc. The block
+  # above sources this file when it exists; rotating a value is an edit here.
+  if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    mkdir -p "$BOX_CONF_DIR"
+    chmod 700 "$BOX_CONF_DIR"
+    if [ ! -f "$BOX_SHELL_ENV" ]; then
+      install -m 600 /dev/null "$BOX_SHELL_ENV"
+      printf '# box-bootstrap shell secrets — sourced by ~/.bashrc. Mode 0600.\n' > "$BOX_SHELL_ENV"
+    fi
+    chmod 600 "$BOX_SHELL_ENV"
+    if grep -q '^export CLOUDFLARE_API_TOKEN=' "$BOX_SHELL_ENV"; then
+      ok "CLOUDFLARE_API_TOKEN already in ${BOX_SHELL_ENV}; left untouched (edit it to rotate)"
+    else
+      printf 'export CLOUDFLARE_API_TOKEN=%q\n' "$CLOUDFLARE_API_TOKEN" >> "$BOX_SHELL_ENV"
+      ok "wrote CLOUDFLARE_API_TOKEN to ${BOX_SHELL_ENV} (mode 0600)"
+    fi
+  else
+    ok "CLOUDFLARE_API_TOKEN not set; skipping ${BOX_SHELL_ENV}"
+  fi
+
+  log "Open a new shell or run 'source ~/.bashrc' to pick the block up."
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: dark-factory skills + agent-browser  (--dark-factory)
+# ═════════════════════════════════════════════════════════════════════════════
+check_dark_factory() {
+  local status=0
+  if have_cmd just; then ok "just present"; else warn "just missing"; status=1; fi
+  if have_cmd node; then ok "node present"; else warn "node missing (agent-browser needs it)"; status=1; fi
+  if have_cmd agent-browser; then ok "agent-browser present"; else warn "agent-browser missing"; status=1; fi
+  if [ -f "$DARK_FACTORY_STAMP" ]; then
+    ok "agent-browser browser binaries installed"
+  else
+    warn "agent-browser browser binaries not installed"; status=1
+  fi
+  if [ -d "${DARK_FACTORY_DIR}/.git" ]; then
+    ok "${DARK_FACTORY_DIR} cloned"
+  else
+    warn "${DARK_FACTORY_DIR} not cloned"; status=1
+  fi
+  if [ -d "${CLAUDE_DIR}/skills/drk-01-prd-interview" ]; then
+    ok "dark-factory skills synced into ~/.claude/skills"
+  else
+    warn "dark-factory skills not in ~/.claude/skills"; status=1
+  fi
+  if [ -d "${CODEX_SKILLS_DIR}/dark-factory-codex" ]; then
+    ok "dark-factory skills synced into ~/.codex/skills"
+  else
+    warn "dark-factory skills not in ~/.codex/skills"; status=1
+  fi
+  return $status
+}
+
+install_dark_factory() {
+  log "Component: dark-factory skills + agent-browser"
+
+  # 1. just (apt).
+  if have_cmd just; then
+    ok "just already installed; skipping"
+  else
+    $SUDO apt-get update -qq || warn "apt-get update failed; trying the install anyway"
+    $SUDO apt-get install -y just || warn "could not apt-install just"
+  fi
+
+  # 2. agent-browser (npm global) — needs node.
+  if ! have_cmd node; then
+    warn "node not found; skipping agent-browser (install Node, then re-run --dark-factory)"
+  else
+    if have_cmd agent-browser; then
+      ok "agent-browser already installed; skipping"
+    else
+      # A NodeSource/apt Node puts the global prefix under /usr, which the box
+      # user cannot write (managed boxes hit this); fall back to sudo.
+      if ! npm install -g agent-browser 2>/dev/null; then
+        if [ -n "$SUDO" ] || [ "$(id -u)" -eq 0 ]; then
+          warn "npm global prefix is not user-writable; installing agent-browser with sudo"
+          $SUDO npm install -g agent-browser || warn "could not npm-install agent-browser"
+        else
+          warn "could not npm-install agent-browser (npm global prefix not writable and no sudo)"
+        fi
+      fi
+    fi
+    if have_cmd agent-browser; then
+      if [ -f "$DARK_FACTORY_STAMP" ]; then
+        ok "agent-browser browser binaries already installed"
+      else
+        log "Installing the agent-browser Chromium build"
+        if agent-browser install --with-deps || agent-browser install; then
+          mkdir -p "$(dirname "$DARK_FACTORY_STAMP")"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$DARK_FACTORY_STAMP"
+          ok "browser binaries installed"
+        else
+          warn "agent-browser install failed; re-run --dark-factory once it can reach the network"
+        fi
+      fi
+    fi
+  fi
+
+  # 3. The repo itself (public; cloned anonymously over HTTPS).
+  if [ -d "${DARK_FACTORY_DIR}/.git" ]; then
+    log "Updating ${DARK_FACTORY_DIR}"
+    git -C "$DARK_FACTORY_DIR" pull --ff-only \
+      || warn "could not fast-forward ${DARK_FACTORY_DIR}; leaving the working copy alone"
+  elif [ -e "$DARK_FACTORY_DIR" ]; then
+    warn "${DARK_FACTORY_DIR} exists but is not a git checkout; leaving it alone"
+  else
+    git clone "$DARK_FACTORY_REPO_URL" "$DARK_FACTORY_DIR" \
+      || { warn "clone failed: ${DARK_FACTORY_REPO_URL}"; return 0; }
+    ok "cloned ${DARK_FACTORY_REPO_URL}"
+  fi
+
+  # 4. Populate ~/.claude/skills and ~/.codex/skills from the checkout.
+  if [ -x "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh" ]; then
+    "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh" \
+      || warn "dark-factory sync-to-global.sh failed"
+    ok "synced dark-factory skills into ~/.claude/skills and ~/.codex/skills"
+  else
+    warn "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh not found or not executable"
+  fi
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: push notifications  (--notifications)
+# ═════════════════════════════════════════════════════════════════════════════
+check_notifications() {
+  local status=0 s perm
+  for s in $NOTIFY_SCRIPTS; do
+    if [ -x "${LOCAL_BIN}/${s}" ]; then ok "${s} installed"; else warn "${s} missing"; status=1; fi
+  done
+  if [ -f "$MOSHI_CONF" ]; then
+    ok "${MOSHI_CONF} present"
+    perm="$(stat -c '%a' "$MOSHI_CONF" 2>/dev/null || echo '???')"
+    [ "$perm" = "600" ] || { warn "${MOSHI_CONF} mode is ${perm}, expected 600"; status=1; }
+    grep -q '^MOSHI_WEBHOOK_URL=' "$MOSHI_CONF" || { warn "MOSHI_WEBHOOK_URL not set in ${MOSHI_CONF}"; status=1; }
+  else
+    warn "${MOSHI_CONF} missing (notifications stay silent without it)"; status=1
+  fi
+  if have_cmd jq; then ok "jq present (the hook scripts parse their payload with it)"; else warn "jq missing"; status=1; fi
+  if [ -f "${HOME}/.notifications-off" ]; then
+    warn "~/.notifications-off exists — pushes are muted (run notify-on to unmute)"
+  else
+    ok "push notifications not muted"
+  fi
+  return $status
+}
+
+install_notifications() {
+  log "Component: push notifications"
+
+  local s
+  mkdir -p "$LOCAL_BIN"
+  for s in $NOTIFY_SCRIPTS; do
+    install_managed_file "${NOTIFY_SRC_DIR}/${s}" "${LOCAL_BIN}/${s}" 0755
+  done
+
+  have_cmd jq || warn "jq not found; the Claude/Codex hook wrappers need it to read their payload"
+
+  # The webhook endpoint and its token live here, NOT in the scripts, so
+  # rotating the credential is an edit of this file rather than a reinstall.
+  # On a Spellguard-managed box ~/.config is created by the provisioner as ROOT,
+  # so a plain mkdir under it fails for the box user. Take ownership of the
+  # parent (not its existing children) with sudo when that happens, then retry.
+  if ! mkdir -p "$MOSHI_CONF_DIR" 2>/dev/null; then
+    if have_cmd sudo && sudo -n true 2>/dev/null; then
+      warn "$(dirname "$MOSHI_CONF_DIR") is not writable; taking ownership with sudo"
+      sudo mkdir -p "$MOSHI_CONF_DIR"
+      sudo chown "$(id -u):$(id -g)" "$(dirname "$MOSHI_CONF_DIR")" "$MOSHI_CONF_DIR"
+    else
+      die "cannot create ${MOSHI_CONF_DIR} and passwordless sudo is unavailable. Fix with: sudo chown $(id -un) $(dirname "$MOSHI_CONF_DIR")"
+    fi
+  fi
+  chmod 700 "$MOSHI_CONF_DIR"
+  if [ -f "$MOSHI_CONF" ]; then
+    chmod 600 "$MOSHI_CONF"
+    ok "${MOSHI_CONF} already present; left untouched (mode 0600 enforced)"
+  else
+    require_env MOSHI_WEBHOOK_URL "The push webhook endpoint the notify scripts POST to."
+    install -m 600 /dev/null "$MOSHI_CONF"
+    {
+      printf '# box-bootstrap push webhook — sourced by ~/.local/bin/notify-moshi.sh.\n'
+      printf '# Mode 0600. Rotate by editing this file; no reinstall needed.\n'
+      printf 'MOSHI_WEBHOOK_URL=%q\n' "$MOSHI_WEBHOOK_URL"
+      printf 'MOSHI_WEBHOOK_TOKEN=%q\n' "${MOSHI_WEBHOOK_TOKEN:-}"
+    } > "$MOSHI_CONF"
+    ok "wrote ${MOSHI_CONF} (mode 0600)"
+  fi
+
+  # notify-codex.sh is installed but ~/.codex/config.toml's `notify` key is
+  # deliberately left alone: on a bridge-equipped box the Matrix bridge owns
+  # that key and fans out to this script itself.
+  ok "notify-codex.sh installed; ~/.codex/config.toml 'notify' left untouched (the bridge owns it)"
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Component: global agent instructions  (--global-instructions)
+# ═════════════════════════════════════════════════════════════════════════════
+# Resolve the go-grip browsable base URL used by the File Links section.
+resolve_gogrip_base_url() {
+  if [ -n "${GOGRIP_BASE_URL:-}" ]; then
+    printf '%s' "$GOGRIP_BASE_URL"
+    return 0
+  fi
+  require_env BOX_NAME "This node's hostname in the personal tailnet."
+  require_env PERSONAL_TAILNET "Your tailnet's MagicDNS domain, e.g. tailXXXXXX.ts.net. Or set GOGRIP_BASE_URL directly."
+  printf 'http://%s.%s:%s' "$BOX_NAME" "$PERSONAL_TAILNET" "$GOGRIP_PORT"
+}
+
+check_global_instructions() {
+  local status=0
+  if [ -f "$CLAUDE_MD" ]; then
+    ok "~/.claude/CLAUDE.md present"
+    grep -q '@~/.codex/AGENTS.md' "$CLAUDE_MD" || { warn "CLAUDE.md does not import ~/.codex/AGENTS.md"; status=1; }
+  else
+    warn "~/.claude/CLAUDE.md missing"; status=1
+  fi
+  if [ -f "$CODEX_AGENTS_MD" ]; then
+    ok "~/.codex/AGENTS.md present"
+    if grep -q '{{GOGRIP_BASE_URL}}' "$CODEX_AGENTS_MD"; then
+      warn "AGENTS.md still holds an unrendered {{GOGRIP_BASE_URL}} placeholder"; status=1
+    fi
+    if ! grep -q 'codex-orchestration:start' "$CODEX_AGENTS_MD"; then
+      warn "AGENTS.md is missing the multi-agent workflow block"; status=1
+    fi
+  else
+    warn "~/.codex/AGENTS.md missing"; status=1
+  fi
+  return $status
+}
+
+install_global_instructions() {
+  log "Component: global agent instructions"
+
+  local url shared tmp
+  url="$(resolve_gogrip_base_url)"
+  shared="${DOTFILES_DIR}/codex/instructions/shared.md"
+
+  # ~/.codex/AGENTS.md — portable core only. Machine-specific context
+  # (infrastructure, per-project runbooks, credential locations) stays out.
+  tmp="$(mktemp)"
+  sed -e "s|{{GOGRIP_BASE_URL}}|${url}|g" \
+      -e "/{{CODEX_SHARED_INSTRUCTIONS}}/{
+            r ${shared}
+            d
+          }" \
+      "${DOTFILES_DIR}/codex/AGENTS.md.template" > "$tmp"
+  install_managed_file "$tmp" "$CODEX_AGENTS_MD" 0644
+  rm -f "$tmp"
+  ok "File Links section points at ${url}"
+
+  # ~/.claude/CLAUDE.md — harness notes plus the @import of AGENTS.md above.
+  install_managed_file "${DOTFILES_DIR}/claude/CLAUDE.md.template" "$CLAUDE_MD" 0644
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -517,15 +1104,11 @@ install_go() {
   $SUDO rm -rf /usr/local/go
   $SUDO tar -C /usr/local -xzf "${tmp}/${tgz}"
   rm -rf "$tmp"
-  # No PATH line is written here. The tracked dotfiles/bash/bash_personal already
-  # puts /usr/local/go/bin on PATH, guarded on the directory existing — and that
-  # file is read by every interactive shell, including tmux panes. ~/.profile is
-  # not (Spellguard's copy execs into tmux partway through).
-  export PATH="${PATH}:/usr/local/go/bin"
-  hash -r
-  [ -f "$BASH_PERSONAL" ] \
-    || warn "~/.bash_personal is not installed, so new shells will not see /usr/local/go/bin; run './install.sh --shell'"
-  ok "Go ${ver} installed to /usr/local/go (open a new shell to pick it up)"
+  # Intentionally single-quoted: write the literal line so $PATH expands when
+  # ~/.profile is sourced, not now.
+  # shellcheck disable=SC2016
+  append_profile_once 'export PATH=$PATH:/usr/local/go/bin'
+  ok "Go ${ver} installed to /usr/local/go (open a new shell or 'source ~/.profile')"
 }
 
 install_docker() {
@@ -557,12 +1140,19 @@ box-bootstrap — personalize a Spellguard-managed cloud dev box (idempotent).
 
 Usage: ./install.sh [--check] [components] [extras]
 
-Core components (default: all five run when none are named):
-  --shell         Personal Bash config (~/.bash_personal + ~/.bash_secrets)
+Core components (default: all four run when none are named):
   --tailscale     Second, personal tailscaled (userspace networking)
   --gogrip        go-grip markdown preview user service
   --matrix        Matrix bridge plugin + ccmatrix config
   --neovim        Complete captured Neovim/LazyVim stack
+
+Agent-environment components (opt in individually, or with --agents):
+  --agent-config        ~/.claude/settings.json + official Claude plugins
+  --codex-config        ~/.codex portable config, agents, skills + plugins
+  --shell               Marker-guarded ~/.bashrc block (aliases, PATH, nvm)
+  --dark-factory        just, agent-browser, dark-factory skills
+  --notifications       ~/.local/bin/notify-*.sh push hooks
+  --global-instructions ~/.claude/CLAUDE.md + ~/.codex/AGENTS.md
 
 Optional extras (off unless requested):
   --with-go       Install the Go toolchain (official tarball)
@@ -570,31 +1160,50 @@ Optional extras (off unless requested):
   --with-uv       Install uv (astral.sh installer)
 
 Modifiers:
-  --all           Core five + every extra
+  --agents        All six agent-environment components
+  --all           Core four + agent-environment six + every extra
   --check         Probe selected components and report; change nothing
   -h, --help      Show this help
 
-Secrets come from the environment; see examples/ccmatrix-config.env.example.
+Secrets come from the environment; see examples/bootstrap.env.example.
 EOF
 }
 
-DO_SHELL=0; DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
+DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
 DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0
-CHECK_ONLY=0; CORE_SELECTED=0
+DO_AGENT_CONFIG=0; DO_CODEX_CONFIG=0; DO_SHELL=0
+DO_DARK_FACTORY=0; DO_NOTIFICATIONS=0; DO_GLOBAL_INSTRUCTIONS=0
+CHECK_ONLY=0; SELECTED=0
+
+select_agent_components() {
+  DO_AGENT_CONFIG=1; DO_CODEX_CONFIG=1; DO_SHELL=1
+  DO_DARK_FACTORY=1; DO_NOTIFICATIONS=1; DO_GLOBAL_INSTRUCTIONS=1
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --shell)       DO_SHELL=1; CORE_SELECTED=1 ;;
-    --tailscale)   DO_TAILSCALE=1; CORE_SELECTED=1 ;;
-    --gogrip)      DO_GOGRIP=1; CORE_SELECTED=1 ;;
-    --matrix)      DO_MATRIX=1; CORE_SELECTED=1 ;;
-    --neovim)      DO_NEOVIM=1; CORE_SELECTED=1 ;;
+    --tailscale)   DO_TAILSCALE=1; SELECTED=1 ;;
+    --gogrip)      DO_GOGRIP=1; SELECTED=1 ;;
+    --matrix)      DO_MATRIX=1; SELECTED=1 ;;
+    --neovim)      DO_NEOVIM=1; SELECTED=1 ;;
+    --agent-config)        DO_AGENT_CONFIG=1; SELECTED=1 ;;
+    --codex-config)        DO_CODEX_CONFIG=1; SELECTED=1 ;;
+    --shell)               DO_SHELL=1; SELECTED=1 ;;
+    --dark-factory)        DO_DARK_FACTORY=1; SELECTED=1 ;;
+    --notifications)       DO_NOTIFICATIONS=1; SELECTED=1 ;;
+    --global-instructions) DO_GLOBAL_INSTRUCTIONS=1; SELECTED=1 ;;
+    --agents)      select_agent_components; SELECTED=1 ;;
     --with-go)     DO_GO=1 ;;
     --with-docker) DO_DOCKER=1 ;;
     --with-uv)     DO_UV=1 ;;
     # Backward-compatible alias from when Neovim was an optional extra.
     --with-neovim) DO_NEOVIM=1 ;;
-    --all)         DO_SHELL=1; DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_GO=1; DO_DOCKER=1; DO_UV=1; DO_NEOVIM=1; CORE_SELECTED=1 ;;
+    --all)
+      DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
+      select_agent_components
+      DO_GO=1; DO_DOCKER=1; DO_UV=1
+      SELECTED=1
+      ;;
     --check)       CHECK_ONLY=1 ;;
     -h|--help)     usage; exit 0 ;;
     *)             die "unknown option: $1 (see --help)" ;;
@@ -602,21 +1211,26 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Default to all five core components when none was specifically selected.
-# --shell qualifies as core: it is pure personalization — no network, no
-# privilege, no secrets.
-if [ "$CORE_SELECTED" -eq 0 ]; then
-  DO_SHELL=1; DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
+# Default to the four core components when nothing was specifically selected.
+# The agent-environment components stay opt-in: they rewrite files a box may
+# already have opinions about.
+if [ "$SELECTED" -eq 0 ]; then
+  DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
 fi
 
 main() {
   local rc=0
   if [ "$CHECK_ONLY" -eq 1 ]; then
     log "Probing selected components (no changes will be made)"
-    [ "$DO_SHELL"     -eq 1 ] && { printf -- '── shell ──\n';      check_shell     || rc=1; }
     [ "$DO_TAILSCALE" -eq 1 ] && { printf -- '── tailscale ──\n'; check_tailscale || rc=1; }
     [ "$DO_GOGRIP"    -eq 1 ] && { printf -- '── go-grip ──\n';    check_gogrip    || rc=1; }
     [ "$DO_MATRIX"    -eq 1 ] && { printf -- '── matrix ──\n';     check_matrix    || rc=1; }
+    [ "$DO_SHELL"     -eq 1 ] && { printf -- '── shell ──\n';      check_shell     || rc=1; }
+    [ "$DO_NOTIFICATIONS"      -eq 1 ] && { printf -- '── notifications ──\n';       check_notifications      || rc=1; }
+    [ "$DO_AGENT_CONFIG"       -eq 1 ] && { printf -- '── agent-config ──\n';        check_agent_config       || rc=1; }
+    [ "$DO_CODEX_CONFIG"       -eq 1 ] && { printf -- '── codex-config ──\n';        check_codex_config       || rc=1; }
+    [ "$DO_GLOBAL_INSTRUCTIONS" -eq 1 ] && { printf -- '── global-instructions ──\n'; check_global_instructions || rc=1; }
+    [ "$DO_DARK_FACTORY"       -eq 1 ] && { printf -- '── dark-factory ──\n';        check_dark_factory       || rc=1; }
     [ "$DO_GO"        -eq 1 ] && { printf -- '── go ──\n';         check_go        || rc=1; }
     [ "$DO_DOCKER"    -eq 1 ] && { printf -- '── docker ──\n';     check_docker    || rc=1; }
     [ "$DO_UV"        -eq 1 ] && { printf -- '── uv ──\n';         check_uv        || rc=1; }
@@ -625,10 +1239,25 @@ main() {
     return $rc
   fi
 
-  [ "$DO_SHELL"     -eq 1 ] && install_shell
   [ "$DO_TAILSCALE" -eq 1 ] && install_tailscale
   [ "$DO_GOGRIP"    -eq 1 ] && install_gogrip
+  # Shell first (it puts ~/.local/bin on PATH), then the notifier scripts the
+  # Claude hooks point at, then the two agent harnesses.
+  [ "$DO_SHELL"          -eq 1 ] && install_shell
+  # Notifications MUST run before the Matrix bridge. `codex-matrix enable`
+  # captures whatever ~/.codex/config.toml's `notify` key points at and fans out
+  # to it from its own wrapper; if the notifier does not exist yet there is
+  # nothing to capture, and the box ends up with a bridge wrapper that has no
+  # passthrough — Codex->Moshi silently never fires. That is exactly the state
+  # cloud-dev-2 was provisioned into (2026-08-19). Re-running the bridge later
+  # does NOT repair it: _install_notify_hook short-circuits once `notify`
+  # already points at its own wrapper.
+  [ "$DO_NOTIFICATIONS"  -eq 1 ] && install_notifications
   [ "$DO_MATRIX"    -eq 1 ] && install_matrix
+  [ "$DO_AGENT_CONFIG"   -eq 1 ] && install_agent_config
+  [ "$DO_CODEX_CONFIG"   -eq 1 ] && install_codex_config
+  [ "$DO_GLOBAL_INSTRUCTIONS" -eq 1 ] && install_global_instructions
+  [ "$DO_DARK_FACTORY"   -eq 1 ] && install_dark_factory
   [ "$DO_GO"        -eq 1 ] && install_go
   [ "$DO_DOCKER"    -eq 1 ] && install_docker
   [ "$DO_UV"        -eq 1 ] && install_uv

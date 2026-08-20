@@ -1,0 +1,46 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "effortLevel": "xhigh",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "{{HOME}}/.local/bin/notify-claude-attention.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "INPUT=$(cat); if printf \"%s\" \"$INPUT\" | grep -qE \"Generated with.{0,4}Claude Code|Co-Authored-By:.{0,2}Claude\"; then echo \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PreToolUse\\\",\\\"permissionDecision\\\":\\\"deny\\\",\\\"permissionDecisionReason\\\":\\\"Blocked by user policy: the Claude attribution footer (Generated with Claude Code / Co-Authored-By: Claude) must never appear in commits, PR bodies, or any command. Rewrite without it.\\\"}}\"; fi",
+            "statusMessage": "Checking for banned attribution footer…",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "{{HOME}}/.local/bin/notify-claude.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ]
+  },
+  "model": "claude-fable-5[1m]",
+  "skipDangerousModePermissionPrompt": true
+}

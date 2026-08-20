@@ -1,0 +1,24 @@
+# Claude Code Global Guidance
+
+@~/.codex/AGENTS.md
+
+## Claude Code Specific Notes
+
+This file imports the shared, agent-neutral global guidance above (Claude Code
+reads `CLAUDE.md`, not `AGENTS.md`) and owns only Claude-Code-specific harness
+behaviour. Each mechanic below lives here and nowhere else.
+
+- **Skill syntax.** When a command or workflow mentions a Spellguard setup/reset
+  skill, use Claude Code slash syntax: `/spellguard-setup`, `/spellguard-reset`.
+- **Edit needs Read.** The Edit tool rejects a file as "not read yet" even if you
+  just viewed it via `cat`, `sed`, or `git show`. Use the Read tool first.
+- **Long waits.** Avoid blocked `sleep N && <cmd>` chains. Use the Monitor tool's
+  until-loop, or a bounded background watcher writing progress to a file you
+  re-read.
+- **`cd` persistence.** A `cd` to a path *inside* the project persists into later
+  Bash calls; a `cd` outside it is reset back to the project root (verified
+  2026-07-09). Use absolute paths or an explicit working directory anyway — a
+  stray `cd` in one call silently changes where later relative paths resolve.
+- **Imports cost context.** `@path/to/file` imports are expanded at session
+  launch and still count as context. They are for parity and maintainability,
+  not context reduction.
