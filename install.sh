@@ -866,15 +866,31 @@ check_dark_factory() {
   else
     warn "${DARK_FACTORY_DIR} not cloned"; status=1
   fi
-  if [ -d "${CLAUDE_DIR}/skills/drk-01-prd-interview" ]; then
+  # The df router is the sentinel for both trees. It is the one skill every
+  # dark-factory install has, and it survives skill renames below it. The old
+  # sentinels (drk-01-prd-interview, dark-factory-codex) were retired with the
+  # drk namespace, so they would report a healthy box as broken.
+  if [ -d "${CLAUDE_DIR}/skills/df" ]; then
     ok "dark-factory skills synced into ~/.claude/skills"
   else
     warn "dark-factory skills not in ~/.claude/skills"; status=1
   fi
-  if [ -d "${CODEX_SKILLS_DIR}/dark-factory-codex" ]; then
+  if [ -d "${CODEX_SKILLS_DIR}/df" ]; then
     ok "dark-factory skills synced into ~/.codex/skills"
   else
     warn "dark-factory skills not in ~/.codex/skills"; status=1
+  fi
+  # sync-to-global.sh mirrors each managed skill directory but never removes a
+  # directory that left the manifest, so retired skills linger and shadow the
+  # ones that replaced them. Name them; removing them stays an operator action.
+  local stale
+  stale=$(ls -d "${CLAUDE_DIR}"/skills/drk-* "${CODEX_SKILLS_DIR}"/drk-* \
+            "${CODEX_SKILLS_DIR}"/dark-factory-codex 2>/dev/null)
+  if [ -n "$stale" ]; then
+    warn "retired drk-era skills still installed; remove them with: rm -rf $(echo "$stale" | tr '\n' ' ')"
+    status=1
+  else
+    ok "no retired drk-era skills installed"
   fi
   return $status
 }
