@@ -62,10 +62,9 @@ use `uv pip install`, `uv sync`, or `uv run`.
 - Never run a destructive virtualization command such as `qm destroy` or
   `pct destroy` without explicit approval.
 
-> The multi-agent section below is synced from the versioned baseline. Its named
-> agents (`luna_worker`, `sol_low`, `sol_medium`, `sol_high`, the Sol xhigh
-> orchestrator) are **Codex-only** definitions, in `~/.codex/agents/*.toml`.
-> Claude Code sessions have no such agents — apply the same orchestration
-> discipline using whichever agent types that harness offers.
+> The delegation-policy note below is synced from the versioned baseline.
+> Delegation rules and per-role model policy live in the dark-factory df
+> skills, not in global instructions. The named Codex agents stay defined in
+> `~/.codex/agents/*.toml`.
 
 {{CODEX_SHARED_INSTRUCTIONS}}

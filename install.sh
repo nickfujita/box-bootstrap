@@ -1046,8 +1046,8 @@ check_global_instructions() {
     if grep -q '{{GOGRIP_BASE_URL}}' "$CODEX_AGENTS_MD"; then
       warn "AGENTS.md still holds an unrendered {{GOGRIP_BASE_URL}} placeholder"; status=1
     fi
-    if ! grep -q 'codex-orchestration:start' "$CODEX_AGENTS_MD"; then
-      warn "AGENTS.md is missing the multi-agent workflow block"; status=1
+    if grep -q 'Root orchestrator responsibilities' "$CODEX_AGENTS_MD"; then
+      warn "AGENTS.md still carries the retired multi-agent doctrine"; status=1
     fi
   else
     warn "~/.codex/AGENTS.md missing"; status=1
