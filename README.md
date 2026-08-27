@@ -26,7 +26,7 @@ already have opinions about:
 | **agent-config** | `~/.claude/settings.json` (model pin, effort level, attribution-blocker hook, notification hooks) + the four official Claude plugins. |
 | **codex-config** | `~/.codex` portable config keys, the four custom agents, the reconciliation skill, and the Codex plugins. |
 | **shell** | One marker-guarded block in `~/.bashrc`: PATH, agent aliases, the alias/function suite, Node heap, nvm auto-use, pnpm and Go PATH. |
-| **dark-factory** | `just`, `agent-browser` + its Chromium build, and the [dark-factory](https://github.com/nickfujita/dark-factory) skills in `~/.claude/skills` and `~/.codex/skills`. |
+| **dark-factory** | `just`, `agent-browser` + its Chromium build, and the [dark-factory](https://github.com/nickfujita/dark-factory) plugin installed on both harnesses (Claude Code and Codex). Removes any sync-mode skill copies an earlier generation left in `~/.claude/skills` or `~/.codex/skills`. |
 | **notifications** | `~/.local/bin/notify-*.sh` push hooks for Claude and Codex, with the webhook credential kept in a separate 0600 file. |
 | **global-instructions** | `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` rendered from vendored templates. |
 

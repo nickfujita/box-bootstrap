@@ -866,31 +866,42 @@ check_dark_factory() {
   else
     warn "${DARK_FACTORY_DIR} not cloned"; status=1
   fi
-  # The df router is the sentinel for both trees. It is the one skill every
-  # dark-factory install has, and it survives skill renames below it. The old
-  # sentinels (drk-01-prd-interview, dark-factory-codex) were retired with the
-  # drk namespace, so they would report a healthy box as broken.
-  if [ -d "${CLAUDE_DIR}/skills/df" ]; then
-    ok "dark-factory skills synced into ~/.claude/skills"
+  # dark-factory ships as a plugin on both harnesses (dark-factory repo v1.0.0
+  # and later). The install probe is the harness's own plugin registry, not a
+  # synced directory.
+  local claude codex
+  if claude="$(agent_cli_path claude)"; then
+    if "$claude" plugin list 2>/dev/null | grep -q "dark-factory@"; then
+      ok "dark-factory plugin installed for Claude Code"
+    else
+      warn "dark-factory plugin not installed for Claude Code"; status=1
+    fi
   else
-    warn "dark-factory skills not in ~/.claude/skills"; status=1
+    warn "claude CLI not found (install --agent-config first)"; status=1
   fi
-  if [ -d "${CODEX_SKILLS_DIR}/df" ]; then
-    ok "dark-factory skills synced into ~/.codex/skills"
+  if codex="$(agent_cli_path codex)"; then
+    if "$codex" plugin list 2>/dev/null | grep "dark-factory@" | grep -q installed; then
+      ok "dark-factory plugin installed for Codex"
+    else
+      warn "dark-factory plugin not installed for Codex"; status=1
+    fi
   else
-    warn "dark-factory skills not in ~/.codex/skills"; status=1
+    warn "codex CLI not found (install --codex-config first)"; status=1
   fi
-  # sync-to-global.sh mirrors each managed skill directory but never removes a
-  # directory that left the manifest, so retired skills linger and shadow the
-  # ones that replaced them. Name them; removing them stays an operator action.
+  # Sync-mode copies are now the drift: a directory under ~/.claude/skills or
+  # ~/.codex/skills shadows the plugin's version of the same skill. The drk-*
+  # names are the retired generation; df* and the dark-factory helpers are
+  # stale sync-mode installs. Re-running --dark-factory removes them.
   local stale
-  stale=$(ls -d "${CLAUDE_DIR}"/skills/drk-* "${CODEX_SKILLS_DIR}"/drk-* \
+  stale=$(ls -d "${CLAUDE_DIR}"/skills/drk-* "${CLAUDE_DIR}"/skills/df \
+            "${CLAUDE_DIR}"/skills/df-* "${CODEX_SKILLS_DIR}"/drk-* \
+            "${CODEX_SKILLS_DIR}"/df "${CODEX_SKILLS_DIR}"/df-* \
             "${CODEX_SKILLS_DIR}"/dark-factory-codex 2>/dev/null)
   if [ -n "$stale" ]; then
-    warn "retired drk-era skills still installed; remove them with: rm -rf $(echo "$stale" | tr '\n' ' ')"
+    warn "sync-mode dark-factory copies shadow the plugin; re-run --dark-factory to remove them"
     status=1
   else
-    ok "no retired drk-era skills installed"
+    ok "no sync-mode dark-factory copies present"
   fi
   return $status
 }
@@ -953,14 +964,69 @@ install_dark_factory() {
     ok "cloned ${DARK_FACTORY_REPO_URL}"
   fi
 
-  # 4. Populate ~/.claude/skills and ~/.codex/skills from the checkout.
-  if [ -x "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh" ]; then
-    "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh" \
-      || warn "dark-factory sync-to-global.sh failed"
-    ok "synced dark-factory skills into ~/.claude/skills and ~/.codex/skills"
-  else
-    warn "${DARK_FACTORY_DIR}/scripts/sync-to-global.sh not found or not executable"
+  # 4. Remove sync-mode copies. Earlier generations of this component populated
+  # ~/.claude/skills and ~/.codex/skills by rsync; those copies now shadow the
+  # plugin. Removal is manifest-driven from the checkout, plus the retired
+  # drk-era names the manifest no longer knows.
+  if [ -f "${DARK_FACTORY_DIR}/manifests/skills.tsv" ]; then
+    local plat src tgt _rest removed=0
+    while IFS="$(printf '\t')" read -r plat src tgt _rest; do
+      [ -n "${plat:-}" ] || continue
+      case "$plat" in \#*) continue ;; esac
+      case "$plat" in
+        claude) [ -d "${CLAUDE_DIR}/skills/$tgt" ] && { rm -rf "${CLAUDE_DIR:?}/skills/$tgt"; removed=$((removed+1)); } ;;
+        codex)  [ -d "${CODEX_SKILLS_DIR}/$tgt" ]  && { rm -rf "${CODEX_SKILLS_DIR:?}/$tgt";  removed=$((removed+1)); } ;;
+      esac
+    done < "${DARK_FACTORY_DIR}/manifests/skills.tsv"
+    rm -rf "${CLAUDE_DIR:?}"/skills/drk-* "${CODEX_SKILLS_DIR:?}"/drk-* \
+           "${CODEX_SKILLS_DIR:?}/dark-factory-codex"
+    if [ -f "${DARK_FACTORY_DIR}/manifests/agents.tsv" ]; then
+      while IFS="$(printf '\t')" read -r plat src tgt _rest; do
+        [ -n "${plat:-}" ] || continue
+        case "$plat" in \#*) continue ;; esac
+        [ "$plat" = claude ] && rm -f "${CLAUDE_DIR}/agents/$tgt"
+      done < "${DARK_FACTORY_DIR}/manifests/agents.tsv"
+    fi
+    ok "removed ${removed} sync-mode skill copies (plugin serves them now)"
   fi
+
+  # 5. Install the plugin on both harnesses. The repo is its own marketplace
+  # for both. Claude treats install-over-installed as a no-op, so an installed
+  # plugin is removed first to force the marketplace's latest version.
+  local claude codex
+  if claude="$(agent_cli_path claude)"; then
+    if "$claude" plugin marketplace list 2>/dev/null | grep -q dark-factory; then
+      "$claude" plugin marketplace update dark-factory \
+        || warn "claude marketplace update failed for dark-factory"
+    else
+      "$claude" plugin marketplace add "$DARK_FACTORY_REPO_URL" \
+        || warn "claude marketplace add failed: ${DARK_FACTORY_REPO_URL}"
+    fi
+    if "$claude" plugin list 2>/dev/null | grep -q "dark-factory@"; then
+      "$claude" plugin uninstall dark-factory >/dev/null 2>&1 || true
+    fi
+    "$claude" plugin install -y dark-factory@dark-factory \
+      && ok "dark-factory plugin installed for Claude Code" \
+      || warn "claude plugin install failed for dark-factory"
+  else
+    warn "claude CLI not found; skipping the Claude plugin (install --agent-config first)"
+  fi
+  if codex="$(agent_cli_path codex)"; then
+    if "$codex" plugin marketplace list 2>/dev/null | grep -q dark-factory; then
+      "$codex" plugin marketplace upgrade \
+        || warn "codex marketplace upgrade failed"
+    else
+      "$codex" plugin marketplace add "$DARK_FACTORY_REPO_URL" \
+        || warn "codex marketplace add failed: ${DARK_FACTORY_REPO_URL}"
+    fi
+    "$codex" plugin add dark-factory@dark-factory \
+      && ok "dark-factory plugin installed for Codex" \
+      || warn "codex plugin add failed for dark-factory"
+  else
+    warn "codex CLI not found; skipping the Codex plugin (install --codex-config first)"
+  fi
+
+  log "Codex asks once, interactively, to trust the plugin's session hook."
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1166,7 +1232,7 @@ Agent-environment components (opt in individually, or with --agents):
   --agent-config        ~/.claude/settings.json + official Claude plugins
   --codex-config        ~/.codex portable config, agents, skills + plugins
   --shell               Marker-guarded ~/.bashrc block (aliases, PATH, nvm)
-  --dark-factory        just, agent-browser, dark-factory skills
+  --dark-factory        just, agent-browser, the dark-factory plugin (both harnesses)
   --notifications       ~/.local/bin/notify-*.sh push hooks
   --global-instructions ~/.claude/CLAUDE.md + ~/.codex/AGENTS.md
 
