@@ -182,10 +182,36 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 # claude_cli / codex_cli — resolve the agent CLIs, which live in ~/.local/bin or
 # an nvm-managed prefix that a non-login shell may not have on PATH yet.
 agent_cli_path() {
-  local name="$1"
+  local name="$1" d
   if have_cmd "$name"; then command -v "$name"; return 0; fi
   if [ -x "${LOCAL_BIN}/${name}" ]; then printf '%s' "${LOCAL_BIN}/${name}"; return 0; fi
+  # An nvm-managed prefix is on PATH only for interactive login shells. Codex
+  # and agent-browser both install there, so a non-interactive run has to look.
+  for d in $(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V -r); do
+    if [ -x "$d/$name" ]; then printf '%s' "$d/$name"; return 0; fi
+  done
   return 1
+}
+
+# use_user_toolchain — put the user's real tool locations on PATH for the rest
+# of this run.
+#
+# A non-interactive shell gets neither ~/.local/bin nor an nvm prefix, so node,
+# npm and agent-browser look absent on a box where they are installed. That is
+# not only a reporting lie. install_dark_factory gates on `have_cmd node` and
+# will silently skip the agent-browser install, and on a box that has a second
+# system node it will instead npm-install agent-browser into a different prefix
+# than the existing copy, leaving two versions whose winner depends on PATH.
+use_user_toolchain() {
+  local d
+  if [ -d "$LOCAL_BIN" ]; then
+    case ":$PATH:" in *":${LOCAL_BIN}:"*) ;; *) PATH="${LOCAL_BIN}:$PATH" ;; esac
+  fi
+  d=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
+  if [ -n "$d" ]; then
+    case ":$PATH:" in *":${d}:"*) ;; *) PATH="${d}:$PATH" ;; esac
+  fi
+  export PATH
 }
 
 # Talk to the PERSONAL tailscaled over its private socket (needs root).
@@ -853,6 +879,7 @@ install_shell() {
 # ═════════════════════════════════════════════════════════════════════════════
 check_dark_factory() {
   local status=0
+  use_user_toolchain
   if have_cmd just; then ok "just present"; else warn "just missing"; status=1; fi
   if have_cmd node; then ok "node present"; else warn "node missing (agent-browser needs it)"; status=1; fi
   if have_cmd agent-browser; then ok "agent-browser present"; else warn "agent-browser missing"; status=1; fi
@@ -908,6 +935,7 @@ check_dark_factory() {
 
 install_dark_factory() {
   log "Component: dark-factory skills + agent-browser"
+  use_user_toolchain
 
   # 1. just (apt).
   if have_cmd just; then
