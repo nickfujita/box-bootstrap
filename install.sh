@@ -181,13 +181,24 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # claude_cli / codex_cli — resolve the agent CLIs, which live in ~/.local/bin or
 # an nvm-managed prefix that a non-login shell may not have on PATH yet.
+# nvm_bin_dirs_desc — nvm node bin dirs, newest first, empty when there are none.
+#
+# This file runs under `set -euo pipefail`. A box with no ~/.nvm makes `ls` fail,
+# pipefail propagates it, and a bare `d=$(...)` assignment then aborts the whole
+# installer. Managed cloud boxes have no nvm, so that abort lands exactly where
+# this tool is most needed. Always exit 0 and let the caller check for empty.
+nvm_bin_dirs_desc() {
+  [ -d "$HOME/.nvm/versions/node" ] || return 0
+  ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V -r || true
+}
+
 agent_cli_path() {
   local name="$1" d
   if have_cmd "$name"; then command -v "$name"; return 0; fi
   if [ -x "${LOCAL_BIN}/${name}" ]; then printf '%s' "${LOCAL_BIN}/${name}"; return 0; fi
   # An nvm-managed prefix is on PATH only for interactive login shells. Codex
   # and agent-browser both install there, so a non-interactive run has to look.
-  for d in $(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V -r); do
+  for d in $(nvm_bin_dirs_desc); do
     if [ -x "$d/$name" ]; then printf '%s' "$d/$name"; return 0; fi
   done
   return 1
@@ -207,7 +218,7 @@ use_user_toolchain() {
   if [ -d "$LOCAL_BIN" ]; then
     case ":$PATH:" in *":${LOCAL_BIN}:"*) ;; *) PATH="${LOCAL_BIN}:$PATH" ;; esac
   fi
-  d=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
+  d=$(nvm_bin_dirs_desc | head -1)
   if [ -n "$d" ]; then
     case ":$PATH:" in *":${d}:"*) ;; *) PATH="${d}:$PATH" ;; esac
   fi
