@@ -30,7 +30,6 @@ DOTFILES_DIR="${SCRIPT_DIR}/dotfiles"
 NOTIFY_SRC_DIR="${SCRIPT_DIR}/scripts/notify"
 
 # ── Constants ────────────────────────────────────────────────────────────────
-GOGRIP_RELEASE_URL="https://github.com/nickfujita/go-grip/releases/latest/download/go-grip-linux-amd64"
 GOGRIP_BIN="${HOME}/.local/bin/go-grip"
 GOGRIP_UNIT="${HOME}/.config/systemd/user/gogrip.service"
 GOGRIP_PORT=6419
@@ -328,26 +327,44 @@ install_tailscale() {
 # ═════════════════════════════════════════════════════════════════════════════
 check_gogrip() {
   local status=0
-  if [ -x "$GOGRIP_BIN" ]; then ok "go-grip binary present"; else warn "go-grip binary missing"; status=1; fi
+  if [ -x "$GOGRIP_BIN" ] && "$GOGRIP_BIN" --help >/dev/null 2>&1; then
+    ok "go-grip binary runnable"
+  else
+    warn "go-grip binary missing or not runnable"; status=1
+  fi
   if [ -f "$GOGRIP_UNIT" ]; then ok "gogrip.service installed"; else warn "gogrip.service not installed"; status=1; fi
   if systemctl --user is-enabled --quiet gogrip.service 2>/dev/null; then
     ok "gogrip.service enabled"
   else
     warn "gogrip.service not enabled"; status=1
   fi
+  if systemctl --user is-active --quiet gogrip.service 2>/dev/null; then
+    ok "gogrip.service active"
+  else
+    warn "gogrip.service not active"; status=1
+  fi
   return $status
 }
 
 install_gogrip() {
+  local arch machine release_url
   log "Component: go-grip preview service"
 
+  machine="$(uname -m)"
+  case "$machine" in
+    x86_64)  arch=amd64 ;;
+    aarch64) arch=arm64 ;;
+    *) die "unsupported architecture ${machine} for go-grip release download" ;;
+  esac
+  release_url="https://github.com/nickfujita/go-grip/releases/latest/download/go-grip-linux-${arch}"
+
   mkdir -p "$(dirname "$GOGRIP_BIN")"
-  if [ -x "$GOGRIP_BIN" ]; then
+  if [ -x "$GOGRIP_BIN" ] && "$GOGRIP_BIN" --help >/dev/null 2>&1; then
     ok "go-grip already installed at ${GOGRIP_BIN}; skipping download"
   else
     log "Downloading go-grip release binary"
-    curl -fsSL "$GOGRIP_RELEASE_URL" -o "$GOGRIP_BIN" \
-      || die "download failed: ${GOGRIP_RELEASE_URL} — has a release been cut yet? (see README)"
+    curl -fsSL "$release_url" -o "$GOGRIP_BIN" \
+      || die "download failed: ${release_url}. Has a release been cut yet? See README."
     chmod +x "$GOGRIP_BIN"
     ok "installed ${GOGRIP_BIN}"
   fi

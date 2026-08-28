@@ -128,9 +128,10 @@ Downloads the go-grip **release binary** to `~/.local/bin/go-grip`, installs
 `loginctl enable-linger $USER`, and enables the service (markdown preview on
 port 6419 with the built-in `nightshade` theme).
 
-> Pulls `go-grip-linux-amd64` from the fork's **GitHub Releases** (latest). The
-> preview is reachable only through the box provider's managed Tailscale — the
-> personal daemon runs `--shields-up` and accepts no inbound connections.
+> Selects the matching Linux asset from the latest
+> [`nickfujita/go-grip` release](https://github.com/nickfujita/go-grip/releases).
+> The preview is reachable only through the box provider's managed Tailscale.
+> The personal daemon runs `--shields-up` and accepts no inbound connections.
 
 ### matrix
 
