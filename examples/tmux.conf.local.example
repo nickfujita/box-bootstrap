@@ -22,6 +22,16 @@ set -g mouse on
 # Longer status-message display.
 set -g display-time 2000
 
+# Match the reference VM's status bar. Prefer Spellguard's box name, then fall
+# back to the host name when this file is used outside a managed box.
+set -g status-style "bg=#2d2d2d,fg=#dba3a2"
+set -g status-left-length 20
+set -g status-left "#[fg=#a3c4db][#{?#{@box},#{@box},#{host_short}}] "
+set -g status-right-length 80
+set -g status-right " #[fg=#dba3c4]#(cd #{pane_current_path}; git branch --show-current 2>/dev/null || echo \"--\")#[fg=#666666] | #[fg=#dba3a2]#(basename \"#{pane_current_path}\") "
+set -g window-status-current-style "fg=#c4dba3,bold"
+set -g window-status-style "fg=#888888"
+
 # Truecolor passthrough for modern terminals (adjust to your $TERM).
 set -ga terminal-overrides ",xterm-256color:Tc"
 

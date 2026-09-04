@@ -138,9 +138,11 @@ port 6419 with the built-in `nightshade` theme).
    `codex-matrix enable`.
 2. Writes `~/.ccmatrix/config.json` at mode **0600** from the `CCMATRIX_*` env
    vars — only if it does not already exist.
-3. Appends `export CCMATRIX_VM_LETTER=…` to `~/.profile` (once).
+3. Appends `export CCMATRIX_VM_LETTER=…` to
+   `~/.config/box-bootstrap/shell.env` (once).
 4. Installs [`examples/tmux.conf.local.example`](examples/tmux.conf.local.example)
-   to `~/.tmux.conf.local` **only if absent**.
+   to `~/.tmux.conf.local` **only if absent**. The override uses the reference
+   VM's gray status bar and shows `[box-name]` before the window list.
 
 > `PLUGINS_REPO_URL` defaults to
 > [`nickfujita/matrix-bridge-plugin`](https://github.com/nickfujita/matrix-bridge-plugin).
