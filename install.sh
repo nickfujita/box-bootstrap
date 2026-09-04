@@ -55,7 +55,7 @@ CLAUDE_PLUGIN_STATE="${CLAUDE_DIR}/plugins/installed_plugins.json"
 # official CLI installed, so every plugin below goes through `claude plugin`.
 CLAUDE_MARKETPLACE="${CLAUDE_MARKETPLACE:-anthropics/claude-plugins-official}"
 CLAUDE_MARKETPLACE_NAME="claude-plugins-official"
-CLAUDE_PLUGINS="superpowers context7 typescript-lsp pyright-lsp"
+CLAUDE_PLUGINS="context7 typescript-lsp pyright-lsp"
 # Never installed here — the box provider's managed provisioning owns it. The
 # --check probe reports on it; nothing in this script ever installs it.
 CLAUDE_PROVIDER_PLUGIN="spellguard@spellguard"
@@ -101,9 +101,6 @@ CODEX_AGENTS_DIR="${CODEX_DIR}/agents"
 CODEX_SKILLS_DIR="${CODEX_DIR}/skills"
 CODEX_AGENTS_MD="${CODEX_DIR}/AGENTS.md"
 CODEX_AGENT_FILES="luna-max.toml terra-xhigh.toml sol-high.toml"
-SUPERPOWERS_MARKETPLACE_URL="${SUPERPOWERS_MARKETPLACE_URL:-https://github.com/obra/superpowers.git}"
-# The name comes from the marketplace's own manifest, not from the URL.
-SUPERPOWERS_MARKETPLACE_NAME="superpowers-dev"
 CODEX_PROVIDER_PLUGIN="spellguard@spellguard"
 
 # ── Shell (component: shell) ─────────────────────────────────────────────────
@@ -672,12 +669,7 @@ check_codex_config() {
       --target "$CODEX_CONFIG" 2>/dev/null | tr '\n' ' ' || true)"
     warn "portable config keys missing from ~/.codex/config.toml: ${missing}"; status=1
   fi
-  if grep -q "^\[marketplaces\.${SUPERPOWERS_MARKETPLACE_NAME}\]" "$CODEX_CONFIG" 2>/dev/null; then
-    ok "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} configured"
-  else
-    warn "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} not configured"; status=1
-  fi
-  for f in "superpowers@${SUPERPOWERS_MARKETPLACE_NAME}" "github@openai-curated"; do
+  for f in "github@openai-curated"; do
     if grep -qF "[plugins.\"${f}\"]" "$CODEX_CONFIG" 2>/dev/null; then
       ok "codex plugin ${f} installed"
     else
@@ -726,23 +718,15 @@ install_codex_config() {
     ok "merged the portable keys into ${CODEX_CONFIG}"
   fi
 
-  # 4. Plugins, through the official CLI only.
+  # 3. Plugins, through the official CLI only.
   if ! codex="$(agent_cli_path codex)"; then
     warn "codex CLI not found; skipping plugin installs. Re-run --codex-config once it is on PATH."
     return 0
   fi
 
-  if grep -q "^\[marketplaces\.${SUPERPOWERS_MARKETPLACE_NAME}\]" "$CODEX_CONFIG" 2>/dev/null; then
-    ok "marketplace ${SUPERPOWERS_MARKETPLACE_NAME} already added"
-  else
-    log "Adding Codex marketplace: ${SUPERPOWERS_MARKETPLACE_URL}"
-    "$codex" plugin marketplace add "$SUPERPOWERS_MARKETPLACE_URL" --ref main \
-      || warn "could not add ${SUPERPOWERS_MARKETPLACE_URL}"
-  fi
-
   # `openai-curated` ships with the CLI, so github@openai-curated needs no
   # marketplace add of its own.
-  for f in "superpowers@${SUPERPOWERS_MARKETPLACE_NAME}" "github@openai-curated"; do
+  for f in "github@openai-curated"; do
     if grep -qF "[plugins.\"${f}\"]" "$CODEX_CONFIG" 2>/dev/null; then
       ok "codex plugin ${f} already installed"
     else
