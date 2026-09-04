@@ -23,8 +23,8 @@ already have opinions about:
 
 | Component | What it does |
 |-----------|--------------|
-| **agent-config** | `~/.claude/settings.json` (model pin, effort level, attribution-blocker hook, notification hooks) + the four official Claude plugins. |
-| **codex-config** | `~/.codex` portable config keys, the four custom agents, the reconciliation skill, and the Codex plugins. |
+| **agent-config** | `~/.claude/settings.json` (model pin, effort level, attribution-blocker hook, notification hooks) + the three official Claude plugins. |
+| **codex-config** | `~/.codex` portable config keys, the three custom agents, the reconciliation skill, and the Codex plugins. |
 | **shell** | One marker-guarded block in `~/.bashrc`: PATH, agent aliases, the alias/function suite, Node heap, nvm auto-use, pnpm and Go PATH. |
 | **dark-factory** | `just`, `agent-browser` + its Chromium build, and the [dark-factory](https://github.com/nickfujita/dark-factory) plugin installed on both harnesses (Claude Code and Codex). Removes any sync-mode skill copies an earlier generation left in `~/.claude/skills` or `~/.codex/skills`. |
 | **notifications** | `~/.local/bin/notify-*.sh` push hooks for Claude and Codex, with the webhook credential kept in a separate 0600 file. |
@@ -106,7 +106,6 @@ needs is missing.
 | `CLOUDFLARE_API_TOKEN` | shell | No — needed for wrangler / Spellguard dev-stack deploys |
 | `NODE_MAX_OLD_SPACE_MB` | shell | No — defaults to `12288` |
 | `DARK_FACTORY_REPO_URL` | dark-factory | No — defaults to the public `nickfujita/dark-factory` |
-| `SUPERPOWERS_MARKETPLACE_URL` | codex-config | No — defaults to `obra/superpowers.git` |
 | `CLAUDE_MARKETPLACE` | agent-config | No — defaults to `anthropics/claude-plugins-official` |
 
 ## What each component does
@@ -240,7 +239,7 @@ Two things are intentionally not portable:
    `~/.local/bin/notify-claude-attention.sh`. They are **only written when
    `--notifications` is also selected or those scripts already exist**, so the
    settings file never references a script that is not there.
-3. Installs `superpowers`, `context7`, `typescript-lsp`, and `pyright-lsp` from
+3. Installs `context7`, `typescript-lsp`, and `pyright-lsp` from
    `claude-plugins-official` **through `claude plugin install`**. A hand-copied
    plugin directory never auto-updates, so the official CLI is the only
    supported path.
@@ -263,9 +262,7 @@ Two things are intentionally not portable:
 2. Merges [`dotfiles/codex/config.portable.toml`](dotfiles/codex/config.portable.toml)
    into `~/.codex/config.toml` **additively** via
    [`scripts/merge-codex-config.sh`](scripts/merge-codex-config.sh).
-3. Adds the superpowers marketplace and installs `superpowers@superpowers-dev`
-   and `github@openai-curated` with `codex plugin marketplace add` /
-   `codex plugin add`.
+3. Installs `github@openai-curated` with `codex plugin add`.
 
 > **The merge only ever adds.** A key that already exists — at the top level or
 > inside `[agents]` — keeps its value and its comments. Tables the baseline does
