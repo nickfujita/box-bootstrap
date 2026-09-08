@@ -1202,12 +1202,54 @@ install_global_instructions() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Optional extras: --with-go / --with-docker / --with-uv
+# Optional extras: --with-go / --with-docker / --with-uv / --with-aws
 # ═════════════════════════════════════════════════════════════════════════════
 check_go()     { if command -v go >/dev/null 2>&1;     then ok "go present";     return 0; else warn "go missing";     return 1; fi; }
 check_docker() { if command -v docker >/dev/null 2>&1; then ok "docker present"; return 0; else warn "docker missing"; return 1; fi; }
 check_uv()     { if command -v uv >/dev/null 2>&1 || [ -x "${HOME}/.local/bin/uv" ]; then ok "uv present"; return 0; else warn "uv missing"; return 1; fi; }
 check_neovim() { "${SCRIPT_DIR}/scripts/install-neovim.sh" --check; }
+
+check_aws() {
+  local version
+  # Check the standard SSH PATH too: an installation under root's home is
+  # insufficient, even when bootstrap itself runs under sudo.
+  if version="$(PATH=/usr/local/bin:/usr/bin:/bin aws --version 2>/dev/null)" &&
+     [[ "$version" == aws-cli/2.* ]] &&
+     version="$(aws --version 2>/dev/null)" && [[ "$version" == aws-cli/2.* ]]; then
+    ok "AWS CLI v2 available on the standard SSH PATH and current PATH"
+    return 0
+  fi
+  warn "AWS CLI v2 missing, broken, or shadowed on PATH"
+  return 1
+}
+
+install_aws() (
+  log "Component: AWS CLI v2"
+  if check_aws >/dev/null 2>&1; then ok "AWS CLI v2 already available; skipping"; return; fi
+  case "$(uname -m)" in
+    x86_64|aarch64) ;;
+    *) die "unsupported architecture $(uname -m) for AWS CLI install" ;;
+  esac
+  local cmd tmp
+  local missing=()
+  for cmd in curl unzip gpg less groff; do
+    if ! have_cmd "$cmd"; then
+      case "$cmd" in gpg) missing+=(gnupg) ;; *) missing+=("$cmd") ;; esac
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y "${missing[@]}"
+  fi
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  curl -fsSL https://awscli.amazonaws.com/v2/install.sh -o "$tmp"
+  # System mode installs under /usr/local, independent of sudo's HOME. The
+  # upstream installer selects the architecture and verifies the package.
+  $SUDO bash "$tmp" --system
+  hash -r
+  check_aws || die "AWS CLI installation did not make v2 available; check PATH for an older aws command"
+)
 
 install_go() {
   log "Component: Go toolchain"
@@ -1280,6 +1322,8 @@ Optional extras (off unless requested):
   --with-go       Install the Go toolchain (official tarball)
   --with-docker   Install Docker (get.docker.com)
   --with-uv       Install uv (astral.sh installer)
+  --with-aws      Install AWS CLI v2 system-wide (official AWS installer)
+  --aws           Install only AWS CLI v2, or combine with named components
 
 Modifiers:
   --agents        All six agent-environment components
@@ -1292,7 +1336,7 @@ EOF
 }
 
 DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
-DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0
+DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0; DO_AWS=0
 DO_AGENT_CONFIG=0; DO_CODEX_CONFIG=0; DO_SHELL=0
 DO_DARK_FACTORY=0; DO_NOTIFICATIONS=0; DO_GLOBAL_INSTRUCTIONS=0
 CHECK_ONLY=0; SELECTED=0
@@ -1318,12 +1362,14 @@ while [ $# -gt 0 ]; do
     --with-go)     DO_GO=1 ;;
     --with-docker) DO_DOCKER=1 ;;
     --with-uv)     DO_UV=1 ;;
+    --with-aws)    DO_AWS=1 ;;
+    --aws)         DO_AWS=1; SELECTED=1 ;;
     # Backward-compatible alias from when Neovim was an optional extra.
     --with-neovim) DO_NEOVIM=1 ;;
     --all)
       DO_TAILSCALE=1; DO_GOGRIP=1; DO_MATRIX=1; DO_NEOVIM=1
       select_agent_components
-      DO_GO=1; DO_DOCKER=1; DO_UV=1
+      DO_GO=1; DO_DOCKER=1; DO_UV=1; DO_AWS=1
       SELECTED=1
       ;;
     --check)       CHECK_ONLY=1 ;;
@@ -1356,6 +1402,7 @@ main() {
     [ "$DO_GO"        -eq 1 ] && { printf -- '── go ──\n';         check_go        || rc=1; }
     [ "$DO_DOCKER"    -eq 1 ] && { printf -- '── docker ──\n';     check_docker    || rc=1; }
     [ "$DO_UV"        -eq 1 ] && { printf -- '── uv ──\n';         check_uv        || rc=1; }
+    [ "$DO_AWS"       -eq 1 ] && { printf -- '── aws ──\n';        check_aws       || rc=1; }
     [ "$DO_NEOVIM"    -eq 1 ] && { printf -- '── neovim ──\n';     check_neovim    || rc=1; }
     if [ "$rc" -eq 0 ]; then ok "all selected components satisfied"; else warn "some components need install (re-run without --check)"; fi
     return $rc
@@ -1383,6 +1430,7 @@ main() {
   [ "$DO_GO"        -eq 1 ] && install_go
   [ "$DO_DOCKER"    -eq 1 ] && install_docker
   [ "$DO_UV"        -eq 1 ] && install_uv
+  [ "$DO_AWS"       -eq 1 ] && install_aws
   [ "$DO_NEOVIM"    -eq 1 ] && install_neovim
   log "Bootstrap complete."
   return 0

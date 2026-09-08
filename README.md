@@ -15,7 +15,7 @@ agent-environment components, plus optional extras:
 | **gogrip** | Installs the [go-grip](https://github.com/nickfujita/go-grip) release binary and runs it as a systemd **user** service (markdown preview on port 6419, nightshade theme). |
 | **matrix** | Adds the Claude Code Matrix-bridge plugin, enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
 | **neovim** | Installs the complete captured Neovim/LazyVim editor, language toolchains, LSPs, and supporting CLI tools. |
-| *extras* | `--with-go`, `--with-docker`, `--with-uv` — standalone toolchain installs. |
+| *extras* | `--with-go`, `--with-docker`, `--with-uv`, `--with-aws` — optional tool installs. |
 
 Agent-environment components — **opt in** with the flag, or take all six with
 `--agents`. They are off by default because they write files a managed box may
@@ -79,6 +79,23 @@ set -a; . ~/bootstrap.env; set +a
 ```
 
 Run `./install.sh --help` for the full flag list.
+
+### AWS CLI
+
+Run `./install.sh --aws` to install AWS CLI v2 alone, or add `--with-aws`
+to a bootstrap command. `--all` includes it. `--with-aws` alone also selects
+the four default core components, like the other `--with-*` flags.
+
+The [official AWS installer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+runs in system mode on x86_64 and ARM64 Linux, installing under
+`/usr/local/aws-cli` with commands in `/usr/local/bin`. This makes the CLI
+available to the SSH user even when installation uses sudo. Missing installer
+and help dependencies are installed through apt. An existing working v2 on
+both the standard SSH PATH and the current PATH is left in place.
+
+Run `./install.sh --aws --check` to verify availability without making changes.
+Bootstrap does not configure credentials, profiles, or SSO, and does not log in
+or call AWS services. Existing authentication files are left untouched.
 
 ### Runtime environment
 
