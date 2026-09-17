@@ -13,7 +13,7 @@ agent-environment components, plus optional extras:
 |-----------|--------------|
 | **tailscale** | A *second*, personal `tailscaled` on a **personal tailnet**, in userspace-networking mode, alongside the org-managed daemon. |
 | **gogrip** | Installs the [go-grip](https://github.com/nickfujita/go-grip) release binary and runs it as a systemd **user** service (markdown preview on port 6419, nightshade theme). |
-| **matrix** | Adds the Claude Code Matrix-bridge plugin, enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
+| **matrix** | Adds the Matrix bridge plugin marketplace (`matrix-bridge-plugin`), enables `codex-matrix`, and writes `~/.ccmatrix/config.json`. |
 | **neovim** | Installs the complete captured Neovim/LazyVim editor, language toolchains, LSPs, and supporting CLI tools. |
 | *extras* | `--with-go`, `--with-docker`, `--with-uv`, `--with-aws` — optional tool installs. |
 

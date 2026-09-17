@@ -128,7 +128,7 @@ DARK_FACTORY_STAMP="${HOME}/.cache/box-bootstrap/agent-browser-installed"
 # this component wires them into the box: the wrapper, the user service, the
 # tmux formats, and the Codex terminal-title setting. The naming policy the
 # agents follow lives in the AGENTS.md template (--global-instructions).
-MATRIX_PLUGIN_ID="claude-code-matrix@claude-code-matrix"
+MATRIX_PLUGIN_ID="matrix-bridge-plugin@matrix-bridge-plugin"
 SESSION_TITLE_BIN="${LOCAL_BIN}/session-title"
 SESSION_TITLES_UNIT="${HOME}/.config/systemd/user/session-titles.service"
 SESSION_TITLES_MARKER_START='# >>> box-bootstrap session-titles block >>>'

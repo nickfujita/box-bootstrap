@@ -8,14 +8,21 @@
 set -euo pipefail
 
 state="${CLAUDE_HOME:-$HOME/.claude}/plugins/installed_plugins.json"
+# The plugin was registered as claude-code-matrix before its 0.8.0 release; the
+# old id is still honoured so the wrapper keeps working across that upgrade.
 root="$(python3 - "$state" <<'PY' 2>/dev/null || true
 import json, os, sys
-entries = json.load(open(sys.argv[1]))["plugins"]["claude-code-matrix@claude-code-matrix"]
-print(next(e["installPath"] for e in entries if os.path.isdir(e.get("installPath", ""))))
+plugins = json.load(open(sys.argv[1]))["plugins"]
+for plugin_id in ("matrix-bridge-plugin@matrix-bridge-plugin", "claude-code-matrix@claude-code-matrix"):
+    for e in plugins.get(plugin_id, []):
+        if os.path.isdir(e.get("installPath", "")):
+            print(e["installPath"])
+            raise SystemExit
+raise SystemExit(1)
 PY
 )"
 if [ -z "$root" ]; then
-  printf 'session-title: the claude-code-matrix plugin is not installed (no install path in %s)\n' "$state" >&2
+  printf 'session-title: the matrix-bridge-plugin plugin is not installed (no install path in %s)\n' "$state" >&2
   exit 1
 fi
 uv="$(command -v uv || true)"
