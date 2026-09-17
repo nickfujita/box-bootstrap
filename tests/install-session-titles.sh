@@ -48,7 +48,7 @@ EOF
   if [ -n "$plugin" ]; then
     mkdir -p "$plugin"
     cat > "$home/.claude/plugins/installed_plugins.json" <<EOF
-{"plugins": {"claude-code-matrix@claude-code-matrix": [{"installPath": "${plugin}", "version": "0.6.0"}]}}
+{"plugins": {"matrix-bridge-plugin@matrix-bridge-plugin": [{"installPath": "${plugin}", "version": "0.8.0"}]}}
 EOF
   fi
 }
