@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# session-title — run the Matrix bridge plugin's session-title command from
+# wherever Claude Code has the plugin installed right now, so a plugin update
+# moves this command (and session-titles.service, which runs it) along with it.
+# box-bootstrap's --session-titles component installs this to ~/.local/bin.
+
+set -euo pipefail
+
+state="${CLAUDE_HOME:-$HOME/.claude}/plugins/installed_plugins.json"
+root="$(python3 - "$state" <<'PY' 2>/dev/null || true
+import json, os, sys
+entries = json.load(open(sys.argv[1]))["plugins"]["claude-code-matrix@claude-code-matrix"]
+print(next(e["installPath"] for e in entries if os.path.isdir(e.get("installPath", ""))))
+PY
+)"
+if [ -z "$root" ]; then
+  printf 'session-title: the claude-code-matrix plugin is not installed (no install path in %s)\n' "$state" >&2
+  exit 1
+fi
+uv="$(command -v uv || true)"
+[ -n "$uv" ] || uv="$HOME/.local/bin/uv"
+exec "$uv" run --no-sync --quiet --project "$root" session-title "$@"

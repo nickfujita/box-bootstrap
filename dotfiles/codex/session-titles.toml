@@ -1,0 +1,4 @@
+# Publish the Codex thread name as the terminal title so session-titles.service
+# can mirror it. Merged additively into ~/.codex/config.toml by --session-titles.
+[tui]
+terminal_title = ["thread"]

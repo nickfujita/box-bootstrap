@@ -13,7 +13,7 @@
 #   ./install.sh --check              # probe all four core components
 #   ./install.sh --gogrip             # only the selected core component(s)
 #   ./install.sh --neovim             # only the complete editor stack
-#   ./install.sh --agents             # the six agent-environment components
+#   ./install.sh --agents             # the seven agent-environment components
 #   ./install.sh --all                # core four + agents six + every extra
 #   ./install.sh --with-go --with-uv   # core four PLUS optional extras
 #   ./install.sh --matrix --check     # probe just one component
@@ -123,6 +123,21 @@ DARK_FACTORY_REPO_URL="${DARK_FACTORY_REPO_URL:-https://github.com/nickfujita/da
 DARK_FACTORY_DIR="${HOME}/dark-factory"
 DARK_FACTORY_STAMP="${HOME}/.cache/box-bootstrap/agent-browser-installed"
 
+# ── Session titles (component: session-titles) ───────────────────────────────
+# The Matrix bridge plugin ships the `session-title` command and its watcher;
+# this component wires them into the box: the wrapper, the user service, the
+# tmux formats, and the Codex terminal-title setting. The naming policy the
+# agents follow lives in the AGENTS.md template (--global-instructions).
+MATRIX_PLUGIN_ID="claude-code-matrix@claude-code-matrix"
+SESSION_TITLE_BIN="${LOCAL_BIN}/session-title"
+SESSION_TITLES_UNIT="${HOME}/.config/systemd/user/session-titles.service"
+SESSION_TITLES_MARKER_START='# >>> box-bootstrap session-titles block >>>'
+SESSION_TITLES_MARKER_END='# <<< box-bootstrap session-titles block <<<'
+# The plugin's retired installer wrote the same settings between these.
+SESSION_TITLES_LEGACY_START='# session-titles:start'
+SESSION_TITLES_LEGACY_END='# session-titles:end'
+SESSION_TITLES_STAMP="${HOME}/.cache/box-bootstrap/session-titles-windows-adopted"
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  [ok]\033[0m %s\n' "$*"; }
@@ -170,6 +185,101 @@ install_managed_file() {
   fi
   install -m "$mode" "$src" "$dst"
   ok "installed ${dst}"
+}
+
+# marked_block_current FILE START END SRC — true when the region between the
+# START and END marker lines in FILE matches SRC exactly.
+marked_block_current() {
+  local file="$1" start="$2" end="$3" src="$4" current
+  grep -qF "$start" "$file" 2>/dev/null || return 1
+  current="$(mktemp)"
+  awk -v s="$start" -v e="$end" '$0==s {inb=1; next} $0==e {inb=0; next} inb {print}' "$file" > "$current"
+  cmp -s "$current" "$src"
+  local rc=$?
+  rm -f "$current"
+  return $rc
+}
+
+# install_marked_block FILE START END SRC LABEL — converge the marker-guarded
+# region of FILE to SRC: refresh it in place when it drifted, append it when
+# absent, leave everything outside the markers alone. FILE is backed up before
+# any rewrite.
+install_marked_block() {
+  local file="$1" start="$2" end="$3" src="$4" label="$5" tmp bak
+  touch "$file"
+  if grep -qF "$start" "$file"; then
+    if marked_block_current "$file" "$start" "$end" "$src"; then
+      ok "${label} block already current in ${file}"
+      return 0
+    fi
+    bak="$(backup_file "$file")"
+    warn "backed up ${file} to ${bak}"
+    tmp="$(mktemp)"
+    awk -v s="$start" -v e="$end" -v f="$src" '
+      $0==s { print; while ((getline l < f) > 0) print l; close(f); inb=1; next }
+      $0==e { print; inb=0; next }
+      inb   { next }
+      { print }' "$file" > "$tmp"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+    ok "refreshed the ${label} block in ${file}"
+  else
+    {
+      printf '\n%s\n' "$start"
+      cat "$src"
+      printf '%s\n' "$end"
+    } >> "$file"
+    ok "appended the ${label} block to ${file}"
+  fi
+}
+
+# remove_marked_block FILE START END LABEL — drop a marker-guarded region,
+# markers included, after backing FILE up. No-op when the markers are absent.
+remove_marked_block() {
+  local file="$1" start="$2" end="$3" label="$4" tmp bak
+  grep -qF "$start" "$file" 2>/dev/null || return 0
+  bak="$(backup_file "$file")"
+  warn "backed up ${file} to ${bak}"
+  tmp="$(mktemp)"
+  awk -v s="$start" -v e="$end" '
+    $0==s { inb=1; next }
+    $0==e { inb=0; next }
+    inb   { next }
+    { print }' "$file" > "$tmp"
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  ok "removed the ${label} block from ${file}"
+}
+
+# codex_keys_satisfied BASELINE — true when ~/.codex/config.toml already
+# carries every key in BASELINE.
+codex_keys_satisfied() {
+  "${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
+    --baseline "$1" --target "$CODEX_CONFIG" >/dev/null 2>&1
+}
+
+# merge_codex_keys BASELINE LABEL — additively merge BASELINE into
+# ~/.codex/config.toml. An existing key keeps its value; tables the baseline
+# does not name are never touched. Writes through the existing inode so the
+# file keeps its 0600 mode, after a backup.
+merge_codex_keys() {
+  local baseline="$1" label="$2" tmp
+  if codex_keys_satisfied "$baseline"; then
+    ok "~/.codex/config.toml already carries every ${label} key"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  "${SCRIPT_DIR}/scripts/merge-codex-config.sh" \
+    --baseline "$baseline" --target "$CODEX_CONFIG" > "$tmp"
+  if [ -f "$CODEX_CONFIG" ]; then
+    warn "backed up existing config.toml to $(backup_file "$CODEX_CONFIG")"
+    cat "$tmp" > "$CODEX_CONFIG"
+  else
+    mkdir -p "$CODEX_DIR"
+    install -m 0600 "$tmp" "$CODEX_CONFIG"
+  fi
+  rm -f "$tmp"
+  ok "merged the ${label} keys into ${CODEX_CONFIG}"
 }
 
 # have_cmd NAME — quiet command probe.
@@ -646,12 +756,6 @@ install_agent_config() {
 # ═════════════════════════════════════════════════════════════════════════════
 # Component: Codex config, custom agents, skills + plugins  (--codex-config)
 # ═════════════════════════════════════════════════════════════════════════════
-codex_config_satisfied() {
-  "${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
-    --baseline "$(codex_baseline_file)" \
-    --target "$CODEX_CONFIG" >/dev/null 2>&1
-}
-
 check_codex_config() {
   local status=0 f missing
   for f in $CODEX_AGENT_FILES; do
@@ -661,7 +765,7 @@ check_codex_config() {
       warn "agent ${f} missing or drifted"; status=1
     fi
   done
-  if codex_config_satisfied; then
+  if codex_keys_satisfied "$(codex_baseline_file)"; then
     ok "portable config keys present in ~/.codex/config.toml"
   else
     missing="$("${SCRIPT_DIR}/scripts/merge-codex-config.sh" --check \
@@ -688,7 +792,7 @@ check_codex_config() {
 install_codex_config() {
   log "Component: Codex config, custom agents, skills + plugins"
 
-  local f tmp codex
+  local f codex
 
   # 1. Custom agents.
   mkdir -p "$CODEX_AGENTS_DIR"
@@ -699,24 +803,7 @@ install_codex_config() {
   # 2. Portable config keys — ADDITIVE ONLY. An existing key keeps its value,
   #    and the tables the provider writes (shell_environment_policy,
   #    hooks.state, projects, marketplaces) are never named, so never touched.
-  if codex_config_satisfied; then
-    ok "~/.codex/config.toml already carries every portable key"
-  else
-    tmp="$(mktemp)"
-    "${SCRIPT_DIR}/scripts/merge-codex-config.sh" \
-      --baseline "$(codex_baseline_file)" \
-      --target "$CODEX_CONFIG" > "$tmp"
-    if [ -f "$CODEX_CONFIG" ]; then
-      warn "backed up existing config.toml to $(backup_file "$CODEX_CONFIG")"
-      # Write through the existing inode so the file keeps its mode/owner.
-      cat "$tmp" > "$CODEX_CONFIG"
-    else
-      mkdir -p "$CODEX_DIR"
-      install -m 0600 "$tmp" "$CODEX_CONFIG"
-    fi
-    rm -f "$tmp"
-    ok "merged the portable keys into ${CODEX_CONFIG}"
-  fi
+  merge_codex_keys "$(codex_baseline_file)" "portable"
 
   # 3. Plugins, through the official CLI only.
   if ! codex="$(agent_cli_path codex)"; then
@@ -1202,6 +1289,167 @@ install_global_instructions() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Component: session titles in tmux and Matrix  (--session-titles)
+# ═════════════════════════════════════════════════════════════════════════════
+# A Claude Code or Codex session's native title becomes the tmux window name,
+# the right-hand status text, and the Matrix room name. The plugin does the
+# mirroring (`session-title watch`); this component installs the wrapper that
+# finds the plugin, the user service that runs it, the tmux formats that show
+# it, and the Codex setting that publishes the thread name in the first place.
+
+# matrix_plugin_root — the installed plugin's directory, from Claude Code's own
+# plugin state. Fails when the plugin is not installed.
+matrix_plugin_root() {
+  [ -f "$CLAUDE_PLUGIN_STATE" ] || return 1
+  python3 - "$CLAUDE_PLUGIN_STATE" "$MATRIX_PLUGIN_ID" <<'PY' 2>/dev/null
+import json, os, sys
+entries = json.load(open(sys.argv[1]))["plugins"][sys.argv[2]]
+print(next(e["installPath"] for e in entries if os.path.isdir(e.get("installPath", ""))))
+PY
+}
+
+# tmux_server_running — true when the default tmux server answers.
+tmux_server_running() { have_cmd tmux && tmux list-sessions >/dev/null 2>&1; }
+
+check_session_titles() {
+  local status=0 root
+  if [ -f "$SESSION_TITLE_BIN" ] && cmp -s "${SCRIPT_DIR}/scripts/session-title" "$SESSION_TITLE_BIN"; then
+    ok "session-title wrapper in place"
+  else
+    warn "session-title wrapper missing or drifted"; status=1
+  fi
+  if root="$(matrix_plugin_root)"; then
+    ok "Matrix bridge plugin installed at ${root}"
+  else
+    warn "Matrix bridge plugin not installed (${MATRIX_PLUGIN_ID}); the service has nothing to run"; status=1
+  fi
+  if [ -f "$SESSION_TITLES_UNIT" ] && cmp -s "${UNITS_DIR}/session-titles.service" "$SESSION_TITLES_UNIT"; then
+    ok "session-titles.service installed"
+  else
+    warn "session-titles.service missing or drifted"; status=1
+  fi
+  if systemctl --user is-enabled --quiet session-titles.service 2>/dev/null; then
+    ok "session-titles.service enabled"
+  else
+    warn "session-titles.service not enabled"; status=1
+  fi
+  if systemctl --user is-active --quiet session-titles.service 2>/dev/null; then
+    ok "session-titles.service active"
+  else
+    warn "session-titles.service not active"; status=1
+  fi
+  if marked_block_current "$TMUX_LOCAL" "$SESSION_TITLES_MARKER_START" "$SESSION_TITLES_MARKER_END" "${DOTFILES_DIR}/tmux/session-titles.conf"; then
+    ok "session-titles tmux block current in ${TMUX_LOCAL}"
+  else
+    warn "session-titles tmux block missing or drifted in ${TMUX_LOCAL}"; status=1
+  fi
+  if grep -qF "$SESSION_TITLES_LEGACY_START" "$TMUX_LOCAL" 2>/dev/null; then
+    warn "${TMUX_LOCAL} still carries the plugin installer's legacy block; re-run --session-titles to replace it"; status=1
+  fi
+  if codex_keys_satisfied "${DOTFILES_DIR}/codex/session-titles.toml"; then
+    ok "Codex terminal_title set in ~/.codex/config.toml"
+  else
+    warn "Codex tui.terminal_title missing from ~/.codex/config.toml"; status=1
+  fi
+  # The policy rides with --global-instructions; report it here because the
+  # feature is incomplete without it.
+  if grep -qF 'session-title set' "$CODEX_AGENTS_MD" 2>/dev/null; then
+    ok "naming policy present in ~/.codex/AGENTS.md"
+  else
+    warn "naming policy missing from ~/.codex/AGENTS.md — run './install.sh --global-instructions'"; status=1
+  fi
+  return $status
+}
+
+# adopt_agent_windows — flip existing claude/codex windows to automatic names
+# so they pick up their chat titles. Runs once per box: a later manual
+# rename-window is a deliberate override, and re-running the installer must
+# not undo it. The previous names are recorded beside the stamp.
+adopt_agent_windows() {
+  local record windows window command name auto count=0
+  if [ -f "$SESSION_TITLES_STAMP" ]; then
+    ok "existing agent windows already adopted once; manual window names are kept"
+    return 0
+  fi
+  if ! tmux_server_running; then
+    ok "no tmux server running; nothing to adopt"
+    return 0
+  fi
+  mkdir -p "$(dirname "$SESSION_TITLES_STAMP")"
+  record="$(dirname "$SESSION_TITLES_STAMP")/tmux-windows-before-titles-$(date +%Y%m%d%H%M%S).txt"
+  # Space-separated with the name last: tmux rewrites a tab as `_` under a
+  # non-UTF-8 locale, and only the name can contain spaces.
+  windows="$(tmux list-windows -a -F '#{window_id} #{pane_current_command} #{automatic-rename} #{window_name}')"
+  printf '%s\n' "$windows" > "$record"
+  while read -r window command auto name; do
+    [ -n "$window" ] || continue
+    case "$command" in claude|codex) ;; *) continue ;; esac
+    [ "$auto" = "1" ] && continue
+    tmux set-option -w -t "$window" automatic-rename on
+    count=$((count + 1))
+  done <<< "$windows"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$SESSION_TITLES_STAMP"
+  ok "adopted ${count} agent window(s); previous names recorded in ${record}"
+}
+
+install_session_titles() {
+  log "Component: session titles in tmux and Matrix"
+
+  local root
+
+  # 1. tmux formats. The plugin's retired installer kept the same settings
+  #    under its own markers; replace that region rather than stacking two.
+  remove_marked_block "$TMUX_LOCAL" "$SESSION_TITLES_LEGACY_START" "$SESSION_TITLES_LEGACY_END" "legacy session-titles"
+  install_marked_block "$TMUX_LOCAL" "$SESSION_TITLES_MARKER_START" "$SESSION_TITLES_MARKER_END" \
+    "${DOTFILES_DIR}/tmux/session-titles.conf" "session-titles"
+  if tmux_server_running; then
+    if tmux source-file "$TMUX_LOCAL"; then
+      ok "reloaded ${TMUX_LOCAL} into the running tmux server"
+    else
+      warn "tmux rejected ${TMUX_LOCAL}; fix it and run 'tmux source-file ${TMUX_LOCAL}'"
+    fi
+  else
+    ok "no tmux server running; the next one reads ${TMUX_LOCAL} at start"
+  fi
+
+  # 2. Codex publishes its thread name only when asked to.
+  merge_codex_keys "${DOTFILES_DIR}/codex/session-titles.toml" "session-titles"
+
+  # 3. The wrapper. It resolves the plugin root on every call, so it is the
+  #    same file on every box and survives a plugin update untouched.
+  install_managed_file "${SCRIPT_DIR}/scripts/session-title" "$SESSION_TITLE_BIN" 0755
+
+  # 4. The service, only once there is a plugin for it to run. Restart=on-failure
+  #    would otherwise loop every five seconds on a box without the plugin.
+  if ! root="$(matrix_plugin_root)"; then
+    warn "Matrix bridge plugin not installed (${MATRIX_PLUGIN_ID}); skipping the service. Run './install.sh --matrix', install the plugin, then re-run --session-titles."
+    return 0
+  fi
+  if have_cmd uv; then
+    # The wrapper and the plugin's own hooks run with --no-sync, so build the
+    # plugin environment here rather than on first use.
+    uv sync --quiet --all-packages --project "$root" || warn "uv sync failed for ${root}; the service may not start"
+  else
+    warn "uv not found; the plugin environment was not built (see --with-uv)"
+  fi
+  install_managed_file "${UNITS_DIR}/session-titles.service" "$SESSION_TITLES_UNIT" 0644
+  $SUDO loginctl enable-linger "$USER" \
+    || warn "could not enable-linger for ${USER}; the user service may stop at logout"
+  systemctl --user daemon-reload
+  systemctl --user enable session-titles.service
+  systemctl --user restart session-titles.service
+  ok "session-titles.service enabled and running from ${root}"
+
+  # 5. Existing agent windows, once.
+  adopt_agent_windows
+
+  if ! grep -qF 'session-title set' "$CODEX_AGENTS_MD" 2>/dev/null; then
+    log "The agents learn to name sessions from ~/.codex/AGENTS.md: run './install.sh --global-instructions'."
+  fi
+  log "Restart open Claude Code sessions once so they load the plugin's title hooks."
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Optional extras: --with-go / --with-docker / --with-uv / --with-aws
 # ═════════════════════════════════════════════════════════════════════════════
 check_go()     { if command -v go >/dev/null 2>&1;     then ok "go present";     return 0; else warn "go missing";     return 1; fi; }
@@ -1317,6 +1565,7 @@ Agent-environment components (opt in individually, or with --agents):
   --dark-factory        just, agent-browser, the dark-factory plugin (both harnesses)
   --notifications       ~/.local/bin/notify-*.sh push hooks
   --global-instructions ~/.claude/CLAUDE.md + ~/.codex/AGENTS.md
+  --session-titles      Chat titles as tmux window names, status text + Matrix room names
 
 Optional extras (off unless requested):
   --with-go       Install the Go toolchain (official tarball)
@@ -1326,7 +1575,7 @@ Optional extras (off unless requested):
   --aws           Install only AWS CLI v2, or combine with named components
 
 Modifiers:
-  --agents        All six agent-environment components
+  --agents        All seven agent-environment components
   --all           Core four + agent-environment six + every extra
   --check         Probe selected components and report; change nothing
   -h, --help      Show this help
@@ -1339,11 +1588,13 @@ DO_TAILSCALE=0; DO_GOGRIP=0; DO_MATRIX=0
 DO_GO=0; DO_DOCKER=0; DO_UV=0; DO_NEOVIM=0; DO_AWS=0
 DO_AGENT_CONFIG=0; DO_CODEX_CONFIG=0; DO_SHELL=0
 DO_DARK_FACTORY=0; DO_NOTIFICATIONS=0; DO_GLOBAL_INSTRUCTIONS=0
+DO_SESSION_TITLES=0
 CHECK_ONLY=0; SELECTED=0
 
 select_agent_components() {
   DO_AGENT_CONFIG=1; DO_CODEX_CONFIG=1; DO_SHELL=1
   DO_DARK_FACTORY=1; DO_NOTIFICATIONS=1; DO_GLOBAL_INSTRUCTIONS=1
+  DO_SESSION_TITLES=1
 }
 
 while [ $# -gt 0 ]; do
@@ -1358,6 +1609,7 @@ while [ $# -gt 0 ]; do
     --dark-factory)        DO_DARK_FACTORY=1; SELECTED=1 ;;
     --notifications)       DO_NOTIFICATIONS=1; SELECTED=1 ;;
     --global-instructions) DO_GLOBAL_INSTRUCTIONS=1; SELECTED=1 ;;
+    --session-titles)      DO_SESSION_TITLES=1; SELECTED=1 ;;
     --agents)      select_agent_components; SELECTED=1 ;;
     --with-go)     DO_GO=1 ;;
     --with-docker) DO_DOCKER=1 ;;
@@ -1398,6 +1650,7 @@ main() {
     [ "$DO_AGENT_CONFIG"       -eq 1 ] && { printf -- '── agent-config ──\n';        check_agent_config       || rc=1; }
     [ "$DO_CODEX_CONFIG"       -eq 1 ] && { printf -- '── codex-config ──\n';        check_codex_config       || rc=1; }
     [ "$DO_GLOBAL_INSTRUCTIONS" -eq 1 ] && { printf -- '── global-instructions ──\n'; check_global_instructions || rc=1; }
+    [ "$DO_SESSION_TITLES"     -eq 1 ] && { printf -- '── session-titles ──\n';      check_session_titles     || rc=1; }
     [ "$DO_DARK_FACTORY"       -eq 1 ] && { printf -- '── dark-factory ──\n';        check_dark_factory       || rc=1; }
     [ "$DO_GO"        -eq 1 ] && { printf -- '── go ──\n';         check_go        || rc=1; }
     [ "$DO_DOCKER"    -eq 1 ] && { printf -- '── docker ──\n';     check_docker    || rc=1; }
@@ -1426,6 +1679,8 @@ main() {
   [ "$DO_AGENT_CONFIG"   -eq 1 ] && install_agent_config
   [ "$DO_CODEX_CONFIG"   -eq 1 ] && install_codex_config
   [ "$DO_GLOBAL_INSTRUCTIONS" -eq 1 ] && install_global_instructions
+  # After --matrix (the plugin) and --global-instructions (the naming policy).
+  [ "$DO_SESSION_TITLES" -eq 1 ] && install_session_titles
   [ "$DO_DARK_FACTORY"   -eq 1 ] && install_dark_factory
   [ "$DO_GO"        -eq 1 ] && install_go
   [ "$DO_DOCKER"    -eq 1 ] && install_docker

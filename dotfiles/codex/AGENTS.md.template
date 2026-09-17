@@ -62,6 +62,18 @@ use `uv pip install`, `uv sync`, or `uv run`.
 - Never run a destructive virtualization command such as `qm destroy` or
   `pct destroy` without explicit approval.
 
+## Session titles
+
+Keep the session title a short description of the overarching objective, usually
+3 to 7 words. When the user replaces that objective or a sustained change makes
+the title misleading, run `session-title set "New title"`. Use `session-title get`
+to check the current title. Do not change it on every turn, branch change, review,
+test run, or debugging detour. Preserve a title the user explicitly chose unless
+they ask to change it. Only the main session updates its title. Subagents must
+not call the helper or rename their parent session. Do not inject `/rename` into
+a running terminal. The helper updates native metadata; tmux and Matrix follow it.
+If the helper cannot identify the session, do not guess from the working directory.
+
 > The delegation-policy note below is synced from the versioned baseline.
 > Delegation rules and per-role model policy live in the dark-factory df
 > skills, not in global instructions. The named Codex agents stay defined in
