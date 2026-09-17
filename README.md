@@ -6,7 +6,7 @@ tailnet, `~/.tmux.conf`, and the kernel `tailscaled` it bootstraps. This repo
 layers *your* personal tooling on top **without touching anything Spellguard
 manages**, and it is safe to re-run — every step is a no-op once it is in place.
 
-It installs four core components (all on by default), six opt-in
+It installs four core components (all on by default), seven opt-in
 agent-environment components, plus optional extras:
 
 | Component | What it does |
@@ -17,7 +17,7 @@ agent-environment components, plus optional extras:
 | **neovim** | Installs the complete captured Neovim/LazyVim editor, language toolchains, LSPs, and supporting CLI tools. |
 | *extras* | `--with-go`, `--with-docker`, `--with-uv`, `--with-aws` — optional tool installs. |
 
-Agent-environment components — **opt in** with the flag, or take all six with
+Agent-environment components — **opt in** with the flag, or take all seven with
 `--agents`. They are off by default because they write files a managed box may
 already have opinions about:
 
@@ -29,6 +29,7 @@ already have opinions about:
 | **dark-factory** | `just`, `agent-browser` + its Chromium build, and the [dark-factory](https://github.com/nickfujita/dark-factory) plugin installed on both harnesses (Claude Code and Codex). Removes any sync-mode skill copies an earlier generation left in `~/.claude/skills` or `~/.codex/skills`. |
 | **notifications** | `~/.local/bin/notify-*.sh` push hooks for Claude and Codex, with the webhook credential kept in a separate 0600 file. |
 | **global-instructions** | `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` rendered from vendored templates. |
+| **session-titles** | A Claude Code or Codex session's title as the tmux window name, the status bar's right side, and the Matrix room name: the `session-title` wrapper, its user service, the tmux formats, and the Codex terminal-title setting. |
 
 ## The two-daemon model
 
@@ -64,7 +65,7 @@ set -a; . ~/bootstrap.env; set +a
 # Or select components / add extras:
 ./install.sh --gogrip                    # just one core component
 ./install.sh --neovim                    # just the complete editor setup
-./install.sh --agents                    # the six agent-environment components
+./install.sh --agents                    # the seven agent-environment components
 ./install.sh --shell --notifications     # just those two
 ./install.sh --with-go --with-uv         # core four + extras
 ./install.sh --all                       # core four + agents six + every extra
@@ -382,6 +383,51 @@ Renders two vendored templates:
 > it in a file under `~/.codex/references/` instead. Neither file is ever
 > overwritten without a timestamped `.pre-box-bootstrap-<ts>` backup.
 
+The template also carries the **Session titles** policy the `--session-titles`
+component relies on: keep the session title a short description of the
+overarching objective and change it with `session-title set` only when that
+objective changes.
+
+### session-titles
+
+The [Matrix bridge plugin](https://github.com/nickfujita/matrix-bridge-plugin)
+ships a `session-title` command and a `watch` loop that mirrors a Claude Code
+or Codex session's native title into tmux and Matrix (see its
+`docs/session-titles.md`). This component wires that into the box:
+
+1. Appends a marker-guarded block from
+   [`dotfiles/tmux/session-titles.conf`](dotfiles/tmux/session-titles.conf) to
+   `~/.tmux.conf.local`: agent windows (a pane running `claude` or `codex`) are
+   named from the chat title, and the status bar's right side shows
+   `task title | repository` for them and the reference `branch | folder` for
+   everything else. A block the plugin's retired installer left between
+   `# session-titles:start` / `# session-titles:end` is removed first.
+2. Merges [`dotfiles/codex/session-titles.toml`](dotfiles/codex/session-titles.toml)
+   (`[tui] terminal_title = ["thread"]`) into `~/.codex/config.toml`
+   additively, through the same
+   [`scripts/merge-codex-config.sh`](scripts/merge-codex-config.sh) as
+   `--codex-config`, so Codex publishes its thread name at all.
+3. Installs [`scripts/session-title`](scripts/session-title) to
+   `~/.local/bin`. The wrapper reads the plugin's install path from
+   `~/.claude/plugins/installed_plugins.json` on every call, so a plugin update
+   moves the command and the service with it and the file is identical on
+   every box.
+4. Installs [`units/session-titles.service`](units/session-titles.service) as
+   a systemd **user** unit running `session-title watch`, builds the plugin's
+   `uv` environment, and enables and restarts the service. This step is
+   skipped, with a warning, until the plugin is installed — a service with
+   nothing to run would just restart every five seconds.
+5. Once per box, flips existing `claude`/`codex` windows to
+   `automatic-rename on` so they pick up their titles, recording their previous
+   names under `~/.cache/box-bootstrap/`. A later manual `rename-window` is a
+   deliberate override and re-runs leave it alone; to follow the chat title
+   again run `tmux set-option -w automatic-rename on` in that window.
+
+> The naming policy itself ships with `--global-instructions`. `--check` on
+> this component reports when `~/.codex/AGENTS.md` lacks it. Restart open
+> Claude Code sessions once after the plugin update so they load its title
+> hooks; existing Codex TUIs adopt the name on their next metadata refresh.
+
 ## Operator-side prerequisites (personal tailnet admin console)
 
 These are one-time setup steps in the **personal** tailnet before a box can join.
@@ -446,8 +492,10 @@ four**; add `--agents` (or the individual flags) to probe the agent-environment
 components too.
 
 Files the agent-environment components own — the vendored Codex agents and
-skill, the `~/.bashrc` block, the notify scripts, `CLAUDE.md`, and `AGENTS.md` —
-deliberately **converge** to the repository copy so every box stays consistent,
+skill, the `~/.bashrc` block, the notify scripts, `CLAUDE.md`, `AGENTS.md`, the
+session-titles block in `~/.tmux.conf.local`, the `session-title` wrapper, and
+its user unit — deliberately **converge** to the repository copy so every box
+stays consistent,
 and a differing pre-existing file is always preserved as
 `<name>.pre-box-bootstrap-<timestamp>` first. Files another system owns are
 never converged: `~/.codex/config.toml` is only ever added to,
@@ -465,16 +513,20 @@ dotfiles/claude/settings.template.json  # ~/.claude/settings.json template
 dotfiles/claude/CLAUDE.md.template      # ~/.claude/CLAUDE.md template
 dotfiles/codex/AGENTS.md.template       # ~/.codex/AGENTS.md template (portable core)
 dotfiles/codex/config.portable.toml     # additively merged into ~/.codex/config.toml
+dotfiles/codex/session-titles.toml      # [tui] terminal_title, merged the same way
 dotfiles/codex/agents/*.toml            # custom Codex agents
 dotfiles/codex/instructions/shared.md   # multi-agent workflow block (sync markers)
 dotfiles/shell/bashrc-block.sh          # the marker-guarded ~/.bashrc block
+dotfiles/tmux/session-titles.conf       # the marker-guarded ~/.tmux.conf.local block
 scripts/install-neovim.sh               # standalone full editor installer
 scripts/bootstrap-nvim.lua              # headless Mason/Tree-sitter installer
 scripts/capture-neovim.sh               # refresh the captured config
 scripts/merge-codex-config.sh           # additive-only TOML merge (+ --check)
 scripts/notify/notify-*.sh              # push hooks installed to ~/.local/bin
+scripts/session-title                   # plugin-locating wrapper installed to ~/.local/bin
 units/tailscaled-personal.service       # personal tailscaled (system unit)
 units/gogrip.service                    # go-grip preview (user unit)
+units/session-titles.service            # session-title watch (user unit)
 examples/bootstrap.env.example          # runtime env template (no real secrets)
 examples/tmux.conf.local.example        # personal tmux overrides
 ```

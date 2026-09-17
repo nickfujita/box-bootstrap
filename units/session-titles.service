@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync native agent session titles to tmux and Matrix
+Documentation=https://github.com/nickfujita/matrix-bridge-plugin/blob/main/docs/session-titles.md
+
+[Service]
+# The wrapper resolves the installed plugin root on every start, so a plugin
+# update only needs a restart here.
+ExecStart=%h/.local/bin/session-title watch
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
